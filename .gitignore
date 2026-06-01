@@ -1,0 +1,5 @@
+/target
+
+# benchmark large artifacts (raw/denoised .d, FASTA, Sage outputs)
+/benchmark/data/
+/benchmark/results/

@@ -1,0 +1,26 @@
+# Example dnoise config. Pass with `dnoise <IN.d> <OUT.d> --config dnoise.toml`.
+# Every key is optional; omitted keys fall back to the built-in defaults shown.
+# Explicit CLI flags override anything set here.
+
+# Column half-width in TOF indices (window spans [c - w, c + w]).
+mz_half_width = 2
+# Minimum total span (scans) of a kept feature.
+min_feature_length = 5
+# Max empty scans tolerated inside a feature.
+max_internal_gap = 1
+# Per-scan summed-intensity floor for occupancy.
+min_window_intensity = 0
+# Total summed-intensity floor for a kept feature.
+min_feature_intensity = 0
+# Filter passes (each re-applies to the previous survivors).
+iterations = 2
+
+# Pre-filter smoothing radius: replace each MS1 frame with the centered running
+# average of its 2r+1 MS1-frame neighborhood before filtering. 0 = off (default).
+# Decoupled from the filter; set iterations = 0 to emit averaged frames only.
+frame_half_width = 0
+
+# Also filter MS/MS frames (default: MS1 only).
+all_frames = false
+# Worker threads (omit to use all cores).
+# threads = 8
