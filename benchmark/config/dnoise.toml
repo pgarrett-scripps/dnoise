@@ -1,0 +1,49 @@
+# dnoise parameters for the PXD070049 benchmark.
+# Used by scripts/04_denoise.sh. Override the path with DNOISE_CONFIG=...
+#
+# Pinned here so the benchmark is reproducible and parameter sweeps are a
+# one-file edit. Every key is optional.
+
+# --- Vertical ion-mobility feature filter (the core denoiser) ---
+# Column half-width in TOF indices (window spans [c - w, c + w]).
+mz_half_width = 3
+# Minimum total span (scans) of a kept feature.
+min_feature_length = 5
+# Max empty scans tolerated inside a feature.
+max_internal_gap = 1
+# Per-scan summed-intensity floor for occupancy.
+min_window_intensity = 0
+# Total summed-intensity floor for a kept feature.
+min_feature_intensity = 0
+# Filter passes (each re-applies to the previous survivors).
+iterations = 2
+
+# --- Horizontal-halo filter (runs after the vertical filter; on by default) ---
+# Removes the weak m/z halo flanking bright ions (each peak vs. the max of its
+# surrounding box, excluding its own TOF column). Set halo = false to reproduce
+# the vertical-filter-only arm.
+halo = true
+halo_peak_fraction = 0.15
+halo_mz_idx_half_width = 80
+halo_scan_half_width = 2
+
+# --- MS/MS denoising (ddaPASEF only; off by default) ---
+# Combine each precursor's fragment scans across frames, filter, prune. Changes
+# MS/MS spectra and identifications; enable to benchmark its effect on IDs.
+denoise_msms = false
+msms_mz_half_width = 3
+msms_min_feature_length = 2
+msms_max_internal_gap = 5
+msms_min_window_intensity = 0
+msms_min_feature_intensity = 0
+msms_iterations = 1
+
+# --- Experimental pre-filter smoothing ---
+# Centered running average over the 2r+1 MS1-frame neighborhood. 0 = off.
+frame_half_width = 0
+
+# --- Operational ---
+# Filter MS1 only (the vertical-IM filter is MS1-specific).
+all_frames = false
+# Worker threads (omit to use all cores).
+# threads = 8

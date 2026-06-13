@@ -6,8 +6,8 @@
 //!
 //! Usage: cargo run --release --example check_codec -- <PATH.d> [num_frames]
 
+use dnoise::codec::decode_frame_type2;
 use dnoise::frame::FlatFrame;
-use dnoise::tdf::encode::decode_frame_type2;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};

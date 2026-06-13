@@ -2,7 +2,7 @@
 //! point set (after grouping by scan / sorting by TOF). This is the gate that the
 //! encoder matches the layout timsrust reads.
 
-use dnoise::tdf::encode::{decode_frame_type2, encode_frame_type2};
+use dnoise::codec::{decode_frame_type2, encode_frame_type2};
 
 /// Group/sort points the way the codec canonicalizes them, for comparison.
 fn canonical(points: &[(u32, u32, u32)]) -> Vec<(u32, u32, u32)> {

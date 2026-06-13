@@ -43,6 +43,7 @@ impl FlatFrame {
         self.tof.len()
     }
 
+    /// True when the frame contains no points.
     pub fn is_empty(&self) -> bool {
         self.tof.is_empty()
     }

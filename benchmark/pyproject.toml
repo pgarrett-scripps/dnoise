@@ -1,0 +1,10 @@
+[project]
+name = "dnoise-benchmark"
+version = "0.1.0"
+description = "Benchmark dnoise's effect on DDA identifications and LFQ quant (PXD028735)"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+]

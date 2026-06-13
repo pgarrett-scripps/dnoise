@@ -2,7 +2,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use dnoise::FilterParams;
+use dnoise::{
+    BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
+    MsmsFilterParams, SmoothParams, WatershedParams,
+};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -43,6 +47,126 @@ struct Cli {
     #[arg(long)]
     frame_half_width: Option<usize>,
 
+    /// Disable the horizontal-halo filter (on by default), which removes the weak
+    /// m/z halo flanking bright ions (left/right) after the vertical filter.
+    #[arg(long)]
+    no_halo: bool,
+    /// Halo: drop a peak below this fraction of its off-column box-max reference.
+    #[arg(long)]
+    halo_peak_fraction: Option<f64>,
+    /// Halo: reference-box half-width along TOF index.
+    #[arg(long)]
+    halo_mz_idx_half_width: Option<u32>,
+    /// Halo: reference-box half-width along ion-mobility scan.
+    #[arg(long)]
+    halo_scan_half_width: Option<usize>,
+
+    /// Denoise ddaPASEF MS/MS frames precursor-by-precursor (off by default):
+    /// combine each precursor's fragment scans across frames, filter the combined
+    /// spectrum, and prune the individual scans. Changes MS/MS spectra (and IDs).
+    #[arg(long)]
+    denoise_msms: bool,
+    /// MS/MS filter: column half-width in TOF indices.
+    #[arg(long)]
+    msms_mz_half_width: Option<u32>,
+    /// MS/MS filter: minimum vertical-run span (scans).
+    #[arg(long)]
+    msms_min_feature_length: Option<usize>,
+    /// MS/MS filter: max empty scans tolerated inside a feature.
+    #[arg(long)]
+    msms_max_internal_gap: Option<usize>,
+    /// MS/MS filter: per-scan summed-intensity floor.
+    #[arg(long)]
+    msms_min_window_intensity: Option<u64>,
+    /// MS/MS filter: total summed-intensity floor for a kept feature.
+    #[arg(long)]
+    msms_min_feature_intensity: Option<u64>,
+    /// MS/MS filter: passes over the combined spectrum's survivors.
+    #[arg(long)]
+    msms_iterations: Option<usize>,
+
+    /// Box-average point intensities after the halo filter (off by default):
+    /// each surviving point's intensity is replaced by the mean over its
+    /// (scan, TOF-index) box. Stabilises the watershed centroider against noise.
+    #[arg(long)]
+    smooth: bool,
+    /// Smoothing: averaging-box half-width along TOF index.
+    #[arg(long)]
+    smooth_mz_idx_half_width: Option<u32>,
+    /// Smoothing: averaging-box half-width along ion-mobility scan.
+    #[arg(long)]
+    smooth_scan_half_width: Option<usize>,
+    /// Smoothing: passes over the smoother's own output.
+    #[arg(long)]
+    smooth_iterations: Option<usize>,
+
+    /// Centroid each filtered frame's survivors with the watershed centroider
+    /// as a final stage (off by default). Lossy: collapses groups of raw points
+    /// into intensity-weighted centroids, typically shrinking the point count to
+    /// a small fraction. Applied to the same frames the vertical filter touches.
+    #[arg(long)]
+    watershed: bool,
+    /// Watershed: nearest-neighbour reach along the ion-mobility scan axis.
+    #[arg(long)]
+    watershed_box_scan: Option<u32>,
+    /// Watershed: nearest-neighbour reach along the TOF-index axis.
+    #[arg(long)]
+    watershed_box_mz_idx: Option<u32>,
+    /// Watershed: minimum intensity for a point to open a new group.
+    #[arg(long)]
+    watershed_min_seed_intensity: Option<u64>,
+    /// Watershed: drop groups whose summed intensity is below this.
+    #[arg(long)]
+    watershed_min_centroid_total: Option<u64>,
+    /// Watershed: max follower distance from the group seed, in TOF indices.
+    #[arg(long)]
+    watershed_max_tof_offset: Option<u32>,
+
+    /// Final stage: greedy small-box centroiding (off by default). Consolidates
+    /// points within small fixed (scan, TOF-index) boxes into intensity-weighted
+    /// centroids — tiling mobility streaks rather than collapsing them (cf.
+    /// --watershed). Mutually exclusive with --watershed.
+    #[arg(long)]
+    box_centroid: bool,
+    /// Box-centroid: box half-width along TOF index (m/z); keep tight.
+    #[arg(long)]
+    box_centroid_mz_idx_half: Option<u32>,
+    /// Box-centroid: box half-width along ion-mobility scan.
+    #[arg(long)]
+    box_centroid_scan_half: Option<u32>,
+    /// Box-centroid: drop boxes whose summed intensity is below this.
+    #[arg(long)]
+    box_centroid_min_total: Option<u64>,
+
+    /// diaPASEF only: drop MS/MS points whose mobility scan falls outside every
+    /// isolation window for their frame (out-of-window noise). No effect on
+    /// ddaPASEF. Independent of the MS/MS streak filter.
+    #[arg(long)]
+    dia_window: bool,
+    /// diaPASEF gate: scans of leniency added to each side of every isolation
+    /// window before a point is treated as out-of-window.
+    #[arg(long)]
+    dia_window_scan_pad: Option<u32>,
+    /// diaPASEF only: when the MS/MS filter runs (--denoise-msms or --all-frames),
+    /// filter each isolation window's scan slice independently instead of the whole
+    /// frame, so a mobility run cannot be fused across a window boundary. No effect
+    /// on ddaPASEF.
+    #[arg(long)]
+    dia_per_window: bool,
+
+    /// diaPASEF only: drop MS1 points whose (m/z, mobility) falls outside every
+    /// isolation window (precursors that are never fragmented). Windows are padded
+    /// per --dia-ms1-mz-pad / --dia-ms1-im-pad so edge precursors keep their full
+    /// isotopic envelope. No effect on ddaPASEF.
+    #[arg(long)]
+    dia_ms1_window: bool,
+    /// diaPASEF MS1 gate: m/z leniency added to each side of every window, in Da.
+    #[arg(long)]
+    dia_ms1_mz_pad: Option<f64>,
+    /// diaPASEF MS1 gate: ion-mobility leniency added to each side, in 1/K0.
+    #[arg(long)]
+    dia_ms1_im_pad: Option<f64>,
+
     /// Filter MS/MS frames too. By default only MS1 frames are filtered (the
     /// vertical-IM filter is MS1-specific and strips most MS/MS fragment signal).
     #[arg(long)]
@@ -67,6 +191,37 @@ struct FileConfig {
     min_feature_intensity: Option<u64>,
     iterations: Option<usize>,
     frame_half_width: Option<usize>,
+    halo: Option<bool>,
+    halo_peak_fraction: Option<f64>,
+    halo_mz_idx_half_width: Option<u32>,
+    halo_scan_half_width: Option<usize>,
+    denoise_msms: Option<bool>,
+    msms_mz_half_width: Option<u32>,
+    msms_min_feature_length: Option<usize>,
+    msms_max_internal_gap: Option<usize>,
+    msms_min_window_intensity: Option<u64>,
+    msms_min_feature_intensity: Option<u64>,
+    msms_iterations: Option<usize>,
+    smooth: Option<bool>,
+    smooth_mz_idx_half_width: Option<u32>,
+    smooth_scan_half_width: Option<usize>,
+    smooth_iterations: Option<usize>,
+    watershed: Option<bool>,
+    watershed_box_scan: Option<u32>,
+    watershed_box_mz_idx: Option<u32>,
+    watershed_min_seed_intensity: Option<u64>,
+    watershed_min_centroid_total: Option<u64>,
+    watershed_max_tof_offset: Option<u32>,
+    box_centroid: Option<bool>,
+    box_centroid_mz_idx_half: Option<u32>,
+    box_centroid_scan_half: Option<u32>,
+    box_centroid_min_total: Option<u64>,
+    dia_window: Option<bool>,
+    dia_window_scan_pad: Option<u32>,
+    dia_per_window: Option<bool>,
+    dia_ms1_window: Option<bool>,
+    dia_ms1_mz_pad: Option<f64>,
+    dia_ms1_im_pad: Option<f64>,
     all_frames: Option<bool>,
     threads: Option<usize>,
 }
@@ -120,6 +275,158 @@ fn main() -> Result<()> {
     // CLI flag > config file > 0 (off).
     let frame_half_width = cli.frame_half_width.or(cfg.frame_half_width).unwrap_or(0);
 
+    // Horizontal-halo filter: on by default; `--no-halo` (or `halo = false` in the
+    // config) disables it. Its knobs follow the same CLI > config > default.
+    let halo_enabled = if cli.no_halo {
+        false
+    } else {
+        cfg.halo.unwrap_or(true)
+    };
+    let hd = HaloParams::default();
+    let halo = HaloParams {
+        peak_fraction: cli
+            .halo_peak_fraction
+            .or(cfg.halo_peak_fraction)
+            .unwrap_or(hd.peak_fraction),
+        mz_idx_half_width: cli
+            .halo_mz_idx_half_width
+            .or(cfg.halo_mz_idx_half_width)
+            .unwrap_or(hd.mz_idx_half_width),
+        scan_half_width: cli
+            .halo_scan_half_width
+            .or(cfg.halo_scan_half_width)
+            .unwrap_or(hd.scan_half_width),
+    };
+
+    // MS/MS denoising (ddaPASEF): off unless --denoise-msms or `denoise_msms = true`.
+    let msms_enabled = cli.denoise_msms || cfg.denoise_msms.unwrap_or(false);
+    let mdf = MsmsFilterParams::default();
+    let msms = MsmsFilterParams {
+        mz_half_width: cli
+            .msms_mz_half_width
+            .or(cfg.msms_mz_half_width)
+            .unwrap_or(mdf.mz_half_width),
+        min_feature_length: cli
+            .msms_min_feature_length
+            .or(cfg.msms_min_feature_length)
+            .unwrap_or(mdf.min_feature_length),
+        max_internal_gap: cli
+            .msms_max_internal_gap
+            .or(cfg.msms_max_internal_gap)
+            .unwrap_or(mdf.max_internal_gap),
+        min_window_intensity: cli
+            .msms_min_window_intensity
+            .or(cfg.msms_min_window_intensity)
+            .unwrap_or(mdf.min_window_intensity),
+        min_feature_intensity: cli
+            .msms_min_feature_intensity
+            .or(cfg.msms_min_feature_intensity)
+            .unwrap_or(mdf.min_feature_intensity),
+        num_iterations: cli
+            .msms_iterations
+            .or(cfg.msms_iterations)
+            .unwrap_or(mdf.num_iterations),
+    };
+
+    // Box-averaging smoother (post-halo, pre-watershed): off unless --smooth or
+    // `smooth = true`. CLI > config > default for its knobs.
+    let smooth_enabled = cli.smooth || cfg.smooth.unwrap_or(false);
+    let sd = SmoothParams::default();
+    let smooth = SmoothParams {
+        mz_idx_half_width: cli
+            .smooth_mz_idx_half_width
+            .or(cfg.smooth_mz_idx_half_width)
+            .unwrap_or(sd.mz_idx_half_width),
+        scan_half_width: cli
+            .smooth_scan_half_width
+            .or(cfg.smooth_scan_half_width)
+            .unwrap_or(sd.scan_half_width),
+        iterations: cli
+            .smooth_iterations
+            .or(cfg.smooth_iterations)
+            .unwrap_or(sd.iterations),
+    };
+
+    // Watershed centroider (final stage): off unless --watershed or `watershed =
+    // true`. Its knobs follow the same CLI > config > default precedence.
+    let watershed_enabled = cli.watershed || cfg.watershed.unwrap_or(false);
+    let wd = WatershedParams::default();
+    let watershed = WatershedParams {
+        box_scan: cli
+            .watershed_box_scan
+            .or(cfg.watershed_box_scan)
+            .unwrap_or(wd.box_scan),
+        box_mz_idx: cli
+            .watershed_box_mz_idx
+            .or(cfg.watershed_box_mz_idx)
+            .unwrap_or(wd.box_mz_idx),
+        min_seed_intensity: cli
+            .watershed_min_seed_intensity
+            .or(cfg.watershed_min_seed_intensity)
+            .unwrap_or(wd.min_seed_intensity),
+        min_centroid_total: cli
+            .watershed_min_centroid_total
+            .or(cfg.watershed_min_centroid_total)
+            .unwrap_or(wd.min_centroid_total),
+        max_tof_offset: cli
+            .watershed_max_tof_offset
+            .or(cfg.watershed_max_tof_offset)
+            .unwrap_or(wd.max_tof_offset),
+    };
+
+    // Greedy small-box centroider (alternative final stage): off unless
+    // --box-centroid or `box_centroid = true`. Mutually exclusive with watershed.
+    let box_centroid_enabled = cli.box_centroid || cfg.box_centroid.unwrap_or(false);
+    if box_centroid_enabled && watershed_enabled {
+        anyhow::bail!(
+            "--box-centroid and --watershed are mutually exclusive (both are terminal centroiders)"
+        );
+    }
+    let bcd = BoxCentroidParams::default();
+    let box_centroid = BoxCentroidParams {
+        mz_idx_half_width: cli
+            .box_centroid_mz_idx_half
+            .or(cfg.box_centroid_mz_idx_half)
+            .unwrap_or(bcd.mz_idx_half_width),
+        scan_half_width: cli
+            .box_centroid_scan_half
+            .or(cfg.box_centroid_scan_half)
+            .unwrap_or(bcd.scan_half_width),
+        min_centroid_total: cli
+            .box_centroid_min_total
+            .or(cfg.box_centroid_min_total)
+            .unwrap_or(bcd.min_centroid_total),
+    };
+
+    // diaPASEF isolation-window features (both off by default, diaPASEF-only).
+    // `dia_window` gates out-of-window MS/MS points; `dia_per_window` makes the
+    // MS/MS filter run window-by-window. Both share the DiaFrameMsMs* tables.
+    let dia_window_enabled = cli.dia_window || cfg.dia_window.unwrap_or(false);
+    let ddw = DiaWindowParams::default();
+    let dia_window = DiaWindowParams {
+        scan_pad: cli
+            .dia_window_scan_pad
+            .or(cfg.dia_window_scan_pad)
+            .unwrap_or(ddw.scan_pad),
+    };
+    let dia_per_window = cli.dia_per_window || cfg.dia_per_window.unwrap_or(false);
+
+    // diaPASEF MS1 out-of-window gate (off by default, diaPASEF-only): drop MS1
+    // points outside every isolation window's (m/z, mobility) region, padded in
+    // physical units. CLI > config > default for the pads.
+    let dia_ms1_enabled = cli.dia_ms1_window || cfg.dia_ms1_window.unwrap_or(false);
+    let dm1d = DiaMs1WindowParams::default();
+    let dia_ms1 = DiaMs1WindowParams {
+        mz_pad: cli
+            .dia_ms1_mz_pad
+            .or(cfg.dia_ms1_mz_pad)
+            .unwrap_or(dm1d.mz_pad),
+        im_pad: cli
+            .dia_ms1_im_pad
+            .or(cfg.dia_ms1_im_pad)
+            .unwrap_or(dm1d.im_pad),
+    };
+
     // Boolean/operational flags: the CLI flag can only turn `all_frames` on; when
     // absent it falls back to the config value (default false).
     let all_frames = cli.all_frames || cfg.all_frames.unwrap_or(false);
@@ -132,14 +439,29 @@ fn main() -> Result<()> {
             .ok();
     }
 
-    let stats = dnoise::denoise(
+    let pb = ProgressBar::new(0);
+    pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} frames").unwrap());
+    let stats = dnoise::denoise_with_progress(
         &cli.input,
         &cli.output,
         &params,
         all_frames,
         frame_half_width,
+        halo_enabled.then_some(&halo),
+        msms_enabled.then_some(&msms),
+        smooth_enabled.then_some(&smooth),
+        watershed_enabled.then_some(&watershed),
+        box_centroid_enabled.then_some(&box_centroid),
+        dia_window_enabled.then_some(&dia_window),
+        dia_per_window,
+        dia_ms1_enabled.then_some(&dia_ms1),
         cli.force,
+        |p| {
+            pb.set_length(p.frames_total as u64);
+            pb.set_position(p.frames_done as u64);
+        },
     )?;
+    pb.finish_and_clear();
     let pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64
     } else {

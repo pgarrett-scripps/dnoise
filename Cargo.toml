@@ -2,22 +2,50 @@
 name = "dnoise"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["Patrick Garrett <pgarrett@scripps.edu>"]
+description = "Denoise Bruker timsTOF .d folders with an iterative vertical ion-mobility feature filter (CLI + library)."
+repository = "https://github.com/pgarrett-scripps/dnoise"
+homepage = "https://github.com/pgarrett-scripps/dnoise"
+documentation = "https://docs.rs/dnoise"
+readme = "README.md"
+license = "MIT"
+keywords = ["mass-spectrometry", "proteomics", "timstof", "denoising", "bruker"]
+categories = ["science", "command-line-utilities"]
+exclude = ["/benchmark", "/tools", "/.github"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["cli"]
+# The `dnoise` command-line binary and its dependencies. Disable
+# (`--no-default-features`) to build only the library.
+cli = ["dep:anyhow", "dep:clap", "dep:indicatif", "dep:serde", "dep:toml"]
+
+[[bin]]
+name = "dnoise"
+required-features = ["cli"]
 
 [dependencies]
-anyhow = "1.0.102"
-clap = { version = "4.6.1", features = ["derive"] }
-indicatif = "0.18.4"
+# Library dependencies.
 rayon = "1.12.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
-serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 # NOTE: the `timscompress` feature (needed to read compression-type-3 / zstd+bitshuffle
 # .d files) is omitted because the published `timscompress` crate (0.1.0) is an empty
 # placeholder, so the feature does not compile. dnoise reads type-2 / uncompressed input
 # and always writes type-2; type-3 input support is blocked on upstream publishing timscompress.
 timsrust = { version = "0.4.2" }
-toml = "1.1.2"
 zstd = "0.13.3"
+
+# CLI-only dependencies (enabled by the `cli` feature).
+anyhow = { version = "1.0.102", optional = true }
+clap = { version = "4.6.1", features = ["derive"], optional = true }
+indicatif = { version = "0.18.4", optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+toml = { version = "1.1.2", optional = true }
 
 [profile.release]
 lto = "thin"

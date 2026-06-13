@@ -3,3 +3,10 @@
 # benchmark large artifacts (raw/denoised .d, FASTA, Sage outputs)
 /benchmark/data/
 /benchmark/results/
+
+# benchmark third-party tools and build artifacts (prebuilt binaries, tarballs, Rust target)
+/benchmark/tools/
+
+# Python caches
+__pycache__/
+*.pyc

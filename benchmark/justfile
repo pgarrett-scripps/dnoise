@@ -1,0 +1,118 @@
+# dnoise benchmark on PXD070049 (timsTOF LFQ, 3-species HYE hybrid)
+#
+# Everything is namespaced by DATASET (default dda_5min). Override per invocation:
+#   just dataset=dda_15min all
+#   DATASET=dda_15min just run-all
+# Known datasets: dda_5min, dda_15min, dia_5min, dia_15min (see 01_list_files.py).
+
+dataset := env_var_or_default("DATASET", "dda_5min")
+export DATASET := dataset
+
+# Default target
+default:
+  @just --list
+
+# 1. Write config/files.<dataset>.tsv for the selected dataset
+list:
+  uv run scripts/01_list_files.py {{dataset}}
+
+# 2. Build the species-tagged hybrid FASTA -> data/fasta/hybrid.fasta (shared)
+fasta:
+  uv run scripts/02_fetch_fasta.py
+
+# 3. Download the dataset's raw .d zips
+download:
+  bash scripts/03_download.sh
+
+# 4. Unzip the downloaded zips -> data/<dataset>/raw/
+unzip:
+  bash scripts/04_unzip.sh
+
+# 5. Denoise each raw .d -> data/<dataset>/{denoised,denoised_msms}/ (both arms)
+denoise:
+  bash scripts/04_denoise.sh
+
+# 6. Run Sage on the 3 arms (set SAGE_BATCH to limit parallelism/RAM)
+search:
+  bash scripts/05_search.sh
+
+# 6b. (DIA datasets) Run DIA-NN on the 3 arms against a once-predicted, cached
+#     spectral library. Set DIANN_BIN to override the diann-linux CLI path.
+diann:
+  bash scripts/11_diann.sh
+
+# 7. Compute ID + LFQ metrics, plots, summary.csv -> results/<dataset>/analysis/
+analyze:
+  uv run scripts/06_analyze.py
+
+# 7b. (DIA datasets) Compute ID + LFQ metrics from DIA-NN output -> analysis/
+analyze-dia:
+  uv run scripts/12_analyze_dia.py
+
+# 8. Data-volume reduction figure + stats -> results/<dataset>/analysis/
+datasize:
+  uv run scripts/07_data_reduction.py
+
+# Cross-dataset comparison (e.g. dda_5min vs dda_15min) -> results/compare/
+compare:
+  uv run scripts/10_compare.py
+
+# Paper Fig 2: merged compression figure across gradients -> results/compare/compression.png
+compression-figure:
+  uv run scripts/14_compression_figure.py
+
+# Paper Fig 4: identifications across gradients -> results/compare/id_counts.png
+id-figure:
+  uv run scripts/15_id_figure.py
+
+# Paper Fig 5: LFQ accuracy across gradients -> results/compare/lfq_accuracy.png
+lfq-figure:
+  uv run scripts/16_lfq_accuracy_figure.py
+
+# Supporting Information assets: tables (-> paper/si/) + SI figures (-> paper/figures/)
+si-assets:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cargo build --release --example dump_frame --manifest-path ../Cargo.toml
+  # DIA per-run reduction CSV (needed for the DIA compression table)
+  DATASET=dia_5min uv run scripts/07_data_reduction.py >/dev/null
+  # SI tables (per-run dda 5/15 + dia 5, full accuracy) + config copy
+  uv run scripts/17_si_tables.py dda_5min dda_15min dia_5min
+  # MS/MS before/after frames (DDA + DIA)
+  uv run scripts/18_msms_frame_figure.py dda_5min
+  uv run scripts/18_msms_frame_figure.py dia_5min
+  cp results/dda_5min/analysis/msms_beforeafter.png ../paper/figures/si_msms_dda.png
+  cp results/dia_5min/analysis/msms_beforeafter.png ../paper/figures/si_msms_dia.png
+  # per-gradient SI figures (per-file reduction, violins, CV)
+  for g in 5min 15min; do
+    cp results/dda_$g/analysis/data_reduction.png   ../paper/figures/si_perfile_$g.png
+    cp results/dda_$g/analysis/lfq_ratio_violins.png ../paper/figures/si_violins_$g.png
+    cp results/dda_$g/analysis/lfq_cv.png            ../paper/figures/si_cv_$g.png
+  done
+  echo "SI assets refreshed; compile with: cd ../paper && typst compile supplementary.typ"
+
+# Paper figures 1/2 (before/after) from the most intense MS1 frame
+frame-figures:
+  cargo build --release --example dump_frame --manifest-path ../Cargo.toml
+  uv run scripts/08_frame_figures.py
+
+# Paper figure: compression vs min_feature_length on a single file
+sweep:
+  uv run scripts/09_compression_sweep.py
+
+# Watershed arm (Fig 6): denoise with the centroider, then Sage on that arm only
+watershed:
+  DENOISE_ARMS=wshed bash scripts/04_denoise.sh
+  bash scripts/05_search.sh
+
+# Paper figure 6: watershed centroider (frame point clouds + compression / quant / LFQ)
+fig6:
+  cargo build --release --example dump_frame --manifest-path ../Cargo.toml
+  uv run scripts/13_watershed_figure.py
+
+# Everything for one dataset, in order
+all: list fasta download unzip denoise search analyze datasize
+
+# Compute-only (assumes raw .d already present): denoise -> search -> analyze
+run-compute:
+  bash scripts/run_compute.sh

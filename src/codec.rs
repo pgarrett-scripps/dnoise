@@ -1,4 +1,4 @@
-//! Type-2 `tdf_bin` frame codec.
+//! Type-2 `tdf_bin` frame codec — encode/decode Bruker timsTOF frame records.
 //!
 //! On-disk a type-2 frame record is:
 //! `[u32 total_byte_count][u32 scan_count][ zstd( byte-transposed u32 array ) ]`.
@@ -18,7 +18,7 @@
 //! here is a faithful reimplementation of that read path, used to gate the
 //! encoder via a round-trip test.
 
-use anyhow::{Result, bail};
+use crate::error::DecodeError;
 
 /// A decoded frame: scan count plus `(scan, tof, intensity)` points in scan/TOF order.
 pub type DecodedFrame = (usize, Vec<(u32, u32, u32)>);
@@ -114,18 +114,18 @@ pub fn encode_empty_frame_type2(num_scans: usize) -> Vec<u8> {
 /// Decode a type-2 record back to `(num_scans, points)`, where `points` are
 /// `(scan, tof, intensity)` triples in scan/TOF order. Faithful reimplementation
 /// of timsrust's read path; used for round-trip testing.
-pub fn decode_frame_type2(record: &[u8]) -> Result<DecodedFrame> {
+pub fn decode_frame_type2(record: &[u8]) -> Result<DecodedFrame, DecodeError> {
     if record.len() < HEADER_BYTES {
-        bail!("record shorter than header");
+        return Err(DecodeError::ShortRecord);
     }
     let total_byte_count = u32::from_le_bytes(record[0..4].try_into().unwrap()) as usize;
     if total_byte_count > record.len() || total_byte_count < HEADER_BYTES {
-        bail!("invalid total_byte_count {total_byte_count}");
+        return Err(DecodeError::InvalidByteCount(total_byte_count));
     }
     let payload = &record[HEADER_BYTES..total_byte_count];
-    let bytes = zstd::decode_all(payload)?;
-    if !bytes.len().is_multiple_of(4) {
-        bail!("decompressed blob not u32-aligned");
+    let bytes = zstd::decode_all(payload).map_err(DecodeError::Zstd)?;
+    if bytes.len() % 4 != 0 {
+        return Err(DecodeError::Misaligned);
     }
     let n = bytes.len() / 4;
     let get = |i: usize| -> u32 {
@@ -137,7 +137,7 @@ pub fn decode_frame_type2(record: &[u8]) -> Result<DecodedFrame> {
 
     let scan_count = get(0) as usize;
     if scan_count > n {
-        bail!("scan_count {scan_count} exceeds blob length {n}");
+        return Err(DecodeError::ScanCountOverflow { scan_count, len: n });
     }
     let peak_count = (n - scan_count) / 2;
 

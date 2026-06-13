@@ -1,0 +1,45 @@
+# dnoise parameters for the PXD070049 watershed-centroider arm (Figure 6).
+# Used by scripts/04_denoise.sh (arm `wshed`). Identical vertical+halo filter to
+# config/dnoise.toml, then the watershed centroider as a lossy final stage that
+# collapses each MS1 frame's survivors into a handful of intensity-weighted
+# centroids. MS/MS is left untouched (denoise_msms = false), so DDA IDs are
+# unaffected and the effect shows up in compression and LFQ.
+
+# --- Vertical ion-mobility feature filter (same as the main benchmark arm) ---
+mz_half_width = 3
+min_feature_length = 5
+max_internal_gap = 1
+min_window_intensity = 0
+min_feature_intensity = 0
+iterations = 2
+
+# --- Horizontal-halo filter (same as the main benchmark arm) ---
+halo = true
+halo_peak_fraction = 0.15
+halo_mz_idx_half_width = 80
+halo_scan_half_width = 2
+
+# --- MS/MS denoising: OFF (this arm only touches MS1) ---
+denoise_msms = false
+
+# --- Intensity smoothing (post-halo, pre-watershed) ---
+# Box-average each survivor's intensity over a small (scan, TOF index) box so
+# the watershed centroider seeds on a smoother surface and doesn't split one ion
+# into several centroids on noise spikes. On for this arm; tune the box if needed.
+smooth = true
+smooth_mz_idx_half_width = 2
+smooth_scan_half_width = 3
+smooth_iterations = 1
+
+# --- Watershed centroider (the point of this arm) ---
+# Collapses the vertical+halo survivors into intensity-weighted (scan, TOF)
+# centroids. Defaults match the library defaults (koth_rust-derived).
+watershed = true
+watershed_box_scan = 10
+watershed_box_mz_idx = 3
+watershed_min_seed_intensity = 0
+watershed_min_centroid_total = 0
+watershed_max_tof_offset = 10
+
+# --- Operational ---
+all_frames = false

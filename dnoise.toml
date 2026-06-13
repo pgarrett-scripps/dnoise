@@ -1,9 +1,11 @@
-# Example dnoise config. Pass with `dnoise <IN.d> <OUT.d> --config dnoise.toml`.
-# Every key is optional; omitted keys fall back to the built-in defaults shown.
-# Explicit CLI flags override anything set here.
+# Example dnoise config — every recognized key, shown at its built-in default.
+# Pass with `dnoise <IN.d> <OUT.d> --config dnoise.toml`.
+# Every key is optional; omitted keys fall back to these defaults. Explicit CLI
+# flags override anything set here.
 
+# --- Vertical ion-mobility feature filter (the core denoiser) ---
 # Column half-width in TOF indices (window spans [c - w, c + w]).
-mz_half_width = 2
+mz_half_width = 3
 # Minimum total span (scans) of a kept feature.
 min_feature_length = 5
 # Max empty scans tolerated inside a feature.
@@ -15,12 +17,95 @@ min_feature_intensity = 0
 # Filter passes (each re-applies to the previous survivors).
 iterations = 2
 
-# Pre-filter smoothing radius: replace each MS1 frame with the centered running
-# average of its 2r+1 MS1-frame neighborhood before filtering. 0 = off (default).
-# Decoupled from the filter; set iterations = 0 to emit averaged frames only.
+# --- Horizontal-halo filter (runs after the vertical filter; on by default) ---
+# Removes the weak m/z halo flanking bright ions (left/right only): each peak is
+# compared to the max intensity of its surrounding box EXCLUDING its own TOF
+# column, and dropped below `peak_fraction` of that reference. Integer
+# (scan, TOF index) space. Set `halo = false` (or pass --no-halo) to disable.
+halo = true
+# Drop a peak below this fraction of the off-column box-max reference.
+halo_peak_fraction = 0.15
+# Reference-box half-width along TOF index.
+halo_mz_idx_half_width = 80
+# Reference-box half-width along ion-mobility scan.
+halo_scan_half_width = 2
+
+# --- MS/MS denoising (ddaPASEF only; off by default) ---
+# Combine each precursor's fragment scans across frames, filter the combined
+# spectrum (vertical + halo), and prune the individual scans. Changes MS/MS
+# spectra (and identifications). Enable with denoise_msms = true (or --denoise-msms).
+denoise_msms = false
+msms_mz_half_width = 3
+msms_min_feature_length = 2
+msms_max_internal_gap = 5
+msms_min_window_intensity = 0
+msms_min_feature_intensity = 0
+msms_iterations = 1
+
+# --- Intensity smoothing (post-halo, pre-watershed; off by default) ---
+# Box-average each surviving point's intensity with the mean over its
+# (scan, TOF index) neighbourhood. Coordinates are unchanged; only intensities
+# are rewritten. Stabilises the watershed centroider, which otherwise can split
+# one ion into several centroids when noise creates local intensity spikes.
+# Enable with smooth = true (or pass --smooth).
+smooth = false
+# Averaging-box half-width along TOF index.
+smooth_mz_idx_half_width = 2
+# Averaging-box half-width along ion-mobility scan.
+smooth_scan_half_width = 3
+# Passes over the smoother's own output.
+smooth_iterations = 1
+
+# --- Watershed centroider (optional final stage; off by default) ---
+# Collapses each filtered frame's surviving points into intensity-weighted
+# centroids via watershed segmentation in integer (scan, TOF index) space.
+# Unlike the filters above (which keep a subset of points), this is LOSSY: it
+# typically shrinks the surviving point count to a small fraction. Applied to
+# the same frames the vertical filter touches. Enable with watershed = true
+# (or pass --watershed).
+watershed = false
+# Nearest-neighbour reach along the ion-mobility scan axis.
+watershed_box_scan = 10
+# Nearest-neighbour reach along the TOF-index axis.
+watershed_box_mz_idx = 3
+# Minimum intensity for a point to open (seed) a new group.
+watershed_min_seed_intensity = 0
+# Drop groups whose summed intensity is below this.
+watershed_min_centroid_total = 0
+# Max follower distance from the group seed, in TOF indices.
+watershed_max_tof_offset = 10
+
+# --- diaPASEF isolation windows (diaPASEF only; both off by default) ---
+# Drop MS/MS points whose mobility scan falls outside every isolation window
+# defined for their frame (DiaFrameMsMsWindows). Out-of-window signal was never
+# isolated, so it is noise. Independent of the MS/MS streak filter. No effect on
+# ddaPASEF (no DiaFrameMsMs* tables). Enable with dia_window = true (--dia-window).
+dia_window = false
+# Scans of leniency added to each side of every window before a point counts as
+# out-of-window.
+dia_window_scan_pad = 0
+# When the MS/MS filter runs (denoise_msms on diaPASEF, or all_frames), filter
+# each isolation window's scan slice independently instead of the whole frame, so
+# a mobility run cannot be fused across a window boundary (cross-talk between
+# unrelated isolation events). Enable with dia_per_window = true (--dia-per-window).
+dia_per_window = false
+# Drop MS1 points whose (m/z, mobility) falls outside every isolation window — i.e.
+# precursors the method never fragments. Windows are padded in physical units (Da
+# and 1/K0) so an edge precursor keeps its full isotopic envelope. No effect on
+# ddaPASEF. Enable with dia_ms1_window = true (--dia-ms1-window).
+dia_ms1_window = false
+# m/z leniency added to each side of every window, in Daltons.
+dia_ms1_mz_pad = 5.0
+# Ion-mobility leniency added to each side of every window, in 1/K0.
+dia_ms1_im_pad = 0.05
+
+# --- Experimental pre-filter smoothing ---
+# Replace each MS1 frame with the centered running average of its 2r+1
+# MS1-frame neighborhood before filtering. 0 = off.
 frame_half_width = 0
 
+# --- Operational ---
 # Also filter MS/MS frames (default: MS1 only).
 all_frames = false
-# Worker threads (omit to use all cores).
+# Worker threads. Omit (leave commented) to use all cores.
 # threads = 8

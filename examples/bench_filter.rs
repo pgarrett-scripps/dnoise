@@ -9,17 +9,20 @@
 //!   cargo flamegraph --profile profiling --example bench_filter -- <input.d> [max_frames] [reps]
 
 use dnoise::FilterParams;
+use dnoise::codec::encode_frame_type2;
 use dnoise::filter::filter_iterated;
 use dnoise::frame::FlatFrame;
-use dnoise::tdf;
-use dnoise::tdf::encode::encode_frame_type2;
+use rusqlite::Connection;
 use std::path::PathBuf;
 use std::time::Instant;
 use timsrust::readers::FrameReader;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let input = PathBuf::from(args.next().expect("usage: bench_filter <input.d> [max_frames] [reps]"));
+    let input = PathBuf::from(
+        args.next()
+            .expect("usage: bench_filter <input.d> [max_frames] [reps]"),
+    );
     let max_frames: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(1000);
     let reps: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(20);
 
@@ -31,14 +34,17 @@ fn main() -> anyhow::Result<()> {
 
     let _ = reps;
     let reader = FrameReader::new(&input).map_err(|e| anyhow::anyhow!("open frames: {e}"))?;
-    let meta = tdf::read_frame_meta(&input.join("analysis.tdf"))?;
 
-    // Production-shaped: each MS1 frame is read once, filtered once, encoded once.
-    // Time the three phases separately to get the real read : filter : encode split.
-    let ms1: Vec<usize> = meta
-        .iter()
+    // Non-empty MS1 frame indices (0-based, == timsrust index), read straight from
+    // the Frames table since the library's SQLite plumbing is crate-private.
+    let conn = Connection::open(input.join("analysis.tdf"))?;
+    let mut stmt = conn.prepare("SELECT NumPeaks, MsMsType FROM Frames ORDER BY Id")?;
+    let ms1: Vec<usize> = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .enumerate()
-        .filter(|(_, m)| m.num_peaks > 0 && m.is_ms1())
+        .filter(|(_, (num_peaks, ms_ms_type))| *num_peaks > 0 && *ms_ms_type == 0)
         .map(|(i, _)| i)
         .take(max_frames)
         .collect();
@@ -52,7 +58,9 @@ fn main() -> anyhow::Result<()> {
 
     for &i in &ms1 {
         let t = Instant::now();
-        let frame = reader.get(i).map_err(|e| anyhow::anyhow!("read frame {i}: {e}"))?;
+        let frame = reader
+            .get(i)
+            .map_err(|e| anyhow::anyhow!("read frame {i}: {e}"))?;
         let flat = FlatFrame::from_frame(&frame);
         t_read += t.elapsed().as_secs_f64();
 
@@ -77,8 +85,14 @@ fn main() -> anyhow::Result<()> {
         total_points as f64 / 1e6,
     );
     eprintln!("  read   : {t_read:.3}s ({:.1}%)", 100.0 * t_read / total);
-    eprintln!("  filter : {t_filter:.3}s ({:.1}%)", 100.0 * t_filter / total);
-    eprintln!("  encode : {t_encode:.3}s ({:.1}%)", 100.0 * t_encode / total);
+    eprintln!(
+        "  filter : {t_filter:.3}s ({:.1}%)",
+        100.0 * t_filter / total
+    );
+    eprintln!(
+        "  encode : {t_encode:.3}s ({:.1}%)",
+        100.0 * t_encode / total
+    );
     eprintln!("  total  : {total:.3}s");
     Ok(())
 }

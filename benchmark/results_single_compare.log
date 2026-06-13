@@ -1,0 +1,161 @@
+using sage 0.15.0-beta.1
+file:  LFQ_Ultra2_PASEF_5min_50ng_Condition_A_REP1.d
+staged 8 arms under /home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage
+running Sage LFQ over all arms (batch 3) ...
+[2026-06-11T18:30:21Z INFO  sage_cli::runner] generated 215942512 fragments, 7659192 peptides in 4.695528789s
+[2026-06-11T18:30:21Z INFO  sage_cli::runner] processing files 0 .. 3 
+[2026-06-11T18:30:26Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 2.416595738s
+[2026-06-11T18:30:29Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 672.674555ms
+[2026-06-11T18:30:30Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 677.456721ms
+[2026-06-11T18:30:31Z INFO  sage_cli::runner] - file IO:    10103 ms
+[2026-06-11T18:30:42Z INFO  sage_cli::runner] - search:     10528 ms (11756 spectra/s)
+[2026-06-11T18:30:42Z INFO  sage_cli::runner] processing files 3 .. 6 
+[2026-06-11T18:30:46Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 1.252091702s
+[2026-06-11T18:30:49Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 734.243622ms
+[2026-06-11T18:30:51Z ERROR sage_cloudpath::tdf] error parsing spectrum: TdfBlobReaderError(Decompression)
+[2026-06-11T18:30:51Z INFO  sage_cloudpath::tdf] read 785 ms1 spectra in 24.666682ms
+[2026-06-11T18:30:52Z INFO  sage_cli::runner] - file IO:    10103 ms
+[2026-06-11T18:31:04Z INFO  sage_cli::runner] - search:     11882 ms (10684 spectra/s)
+[2026-06-11T18:31:04Z INFO  sage_cli::runner] processing files 6 .. 8 
+[2026-06-11T18:31:09Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 2.497314282s
+[2026-06-11T18:31:12Z INFO  sage_cloudpath::tdf] read 786 ms1 spectra in 442.03056ms
+[2026-06-11T18:31:13Z INFO  sage_cli::runner] - file IO:     8653 ms
+[2026-06-11T18:31:21Z INFO  sage_cli::runner] - search:      8004 ms (10573 spectra/s)
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #5: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #0: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #2: y = 0.8950x + 0.0003
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #7: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #1: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #4: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #6: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligning file #3: y = 1.0148x + 0.0002
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_alignment] aligned retention times across 8 files
+[2026-06-11T18:31:21Z INFO  sage_core::ml::retention_model] - fit retention time model, rsq = 0.6528864593939674
+[2026-06-11T18:31:22Z INFO  sage_core::ml::mobility_model] - fit mobility model, rsq = 0.9639756750492975, mse = 0.0008413235861814894
+[2026-06-11T18:31:23Z INFO  sage_core::lfq] tracing MS1 features
+[2026-06-11T18:31:23Z INFO  sage_core::lfq] integrating MS1 features
+[2026-06-11T18:31:23Z INFO  sage_cli::runner] discovered 6879 target MS1 peaks at 5% FDR
+[2026-06-11T18:31:23Z INFO  sage_cli::runner] discovered 82873 target peptide-spectrum matches at 1% FDR
+[2026-06-11T18:31:23Z INFO  sage_cli::runner] discovered 7535 target peptides at 1% FDR
+[2026-06-11T18:31:23Z INFO  sage_cli::runner] discovered 2694 target proteins at 1% FDR
+{
+  "version": "0.15.0-beta.1",
+  "database": {
+    "bucket_size": 8192,
+    "enzyme": {
+      "missed_cleavages": 2,
+      "min_len": 7,
+      "max_len": 30,
+      "cleave_at": "KR",
+      "restrict": "P",
+      "c_terminal": true,
+      "semi_enzymatic": false
+    },
+    "peptide_min_mass": 500.0,
+    "peptide_max_mass": 5000.0,
+    "ion_kinds": [
+      "b",
+      "y"
+    ],
+    "min_ion_index": 2,
+    "static_mods": {
+      "C": 57.0215
+    },
+    "variable_mods": {
+      "M": [
+        15.9949
+      ]
+    },
+    "max_variable_mods": 2,
+    "decoy_tag": "rev_",
+    "generate_decoys": true,
+    "fasta": "/home/patrick-garrett/Repos/d_noise/benchmark/data/fasta/hybrid.fasta",
+    "prefilter_chunk_size": 0,
+    "prefilter": false,
+    "prefilter_low_memory": true
+  },
+  "quant": {
+    "tmt": null,
+    "tmt_settings": {
+      "level": 3,
+      "sn": false
+    },
+    "lfq": true,
+    "lfq_settings": {
+      "peak_scoring": "Hybrid",
+      "integration": "Sum",
+      "spectral_angle": 0.7,
+      "ppm_tolerance": 8.0,
+      "mobility_pct_tolerance": 3.0,
+      "combine_charge_states": true
+    }
+  },
+  "precursor_tol": {
+    "ppm": [
+      -20.0,
+      20.0
+    ]
+  },
+  "fragment_tol": {
+    "ppm": [
+      -20.0,
+      20.0
+    ]
+  },
+  "precursor_charge": [
+    2,
+    4
+  ],
+  "override_precursor_charge": false,
+  "isotope_errors": [
+    -1,
+    2
+  ],
+  "deisotope": true,
+  "chimera": false,
+  "wide_window": false,
+  "min_peaks": 5,
+  "max_peaks": 150,
+  "max_fragment_charge": null,
+  "min_matched_peaks": 3,
+  "report_psms": 1,
+  "predict_rt": true,
+  "mzml_paths": [
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/original.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/dnoise_ms1.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/dnoise_msms.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/bruker_minesweeper.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/bruker_minesweeper_mf30.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/bruker_minesweeper_strong.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/bruker_eh.d",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/stage/bruker_background.d"
+  ],
+  "output_paths": [
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/results.sage.tsv",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/lfq.tsv",
+    "/home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/results.json"
+  ],
+  "bruker_config": {
+    "ms2": {
+      "spectrum_processing_params": {
+        "smoothing_window": 1,
+        "centroiding_window": 1,
+        "calibration_tolerance": 0.1,
+        "calibrate": false
+      },
+      "frame_splitting_params": {
+        "Quadrupole": {
+          "Even": 1
+        }
+      }
+    },
+    "ms1": {
+      "mz_ppm": 5.0,
+      "ims_pct": 3.0
+    }
+  },
+  "score_type": "SageHyperScore"
+}
+[2026-06-11T18:31:24Z INFO  sage_cli::runner] finished in 66s
+[2026-06-11T18:31:24Z INFO  sage_cli::runner] cite: "Sage: An Open-Source Tool for Fast Proteomics Searching and Quantification at Scale" https://doi.org/10.1021/acs.jproteome.3c00486
+done -> /home/patrick-garrett/Repos/d_noise/benchmark/results/single_compare/{results.sage.tsv, lfq.tsv}
