@@ -37,8 +37,8 @@ datasets (see [scripts/01_list_files.py](scripts/01_list_files.py)):
 |---|---|---|
 | `dda_5min` *(default)* | `LFQ_Ultra2_PASEF_5min_50ng` | Sage |
 | `dda_15min` | `LFQ_Ultra2_PASEF_15min_50ng` | Sage |
-| `dia_5min` | `LFQ_Ultra2_diaPASEF_5min_50ng` | DIA-NN *(stub)* |
-| `dia_15min` | `LFQ_Ultra2_diaPASEF_15min_50ng` | DIA-NN *(stub)* |
+| `dia_5min` | `LFQ_Ultra2_diaPASEF_5min_50ng` | DIA-NN |
+| `dia_15min` | `LFQ_Ultra2_diaPASEF_15min_50ng` | DIA-NN |
 
 ## Design
 
@@ -87,6 +87,9 @@ just compare                    # overlay dda_5min vs dda_15min -> results/compa
 
 Requires `uv`, `sage` on PATH, and the built `dnoise` binary
 (`cargo build --release` in the repo root). `data/` and `results/` are gitignored.
+For the DIA datasets you also need **DIA-NN 2.2.0** installed separately (it is
+*not* auto-fetched like Sage); point `DIANN_BIN` at the `diann-linux` CLI before
+`just diann`.
 
 ### Reproducing the manuscript figures and tables
 
@@ -119,7 +122,8 @@ match the rendered figure number; the table resolves both):
 | Fig 6 (centroiders) | `figures/fig5_frames.png` + `fig5_centroiders.png` | `just frame-figs` + `just paper-figures` |
 | Table 1 (dataset) | in `paper.typ` | static (mixing ratios) |
 | Table 2 (ID/quant summary) | in `paper.typ` | numbers from `results/<ds>/analysis/summary.csv` (`just analyze` / `analyze-dia`) |
-| Tables S1–S16, SI figures | `paper/si/*.typ`, `figures/si_*.png` | `just si-assets` (`17_si_tables.py`) |
+| Tables S1–S17, SI figures | `paper/si/*.typ`, `figures/si_*.png` | `just si-assets` (`17_si_tables.py`) |
+| Table S12 (DIA MS1-derived quant) | `paper/si/ms1_quant_dia.typ` | `just si-assets` (`54_ms1_quant_dia.py`) |
 | Accuracy diff S7 / per-run stats S9 | `paper/si/accuracy_diff.typ`, `perrun_stats.typ` | `27_accuracy_diff.py`, `28_perrun_stats.py` |
 | Tool comparison S15 / peptide-rule S16 | hand-entered in `supplementary.typ` | `29_peptide_rule_sensitivity.py` (S16) |
 | Compression sweep (S3) | `figures/compression_sweep.png` | `just sweep` (`09_compression_sweep.py`) |

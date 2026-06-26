@@ -17,7 +17,7 @@ effect). The comparison of interest is across arms within the MS1 column.
 Writes paper/si/ms1_quant_dia.typ (mirrors @tab:dia-2grad layout) and prints the
 full MS1-vs-MS2 table for both gradients.
 
-Usage: uv run --with pyarrow python scripts/54_ms1_quant_dia.py [dataset ...]
+Usage: uv run python scripts/54_ms1_quant_dia.py [dataset ...]
        (default: dia_5min dia_15min)
 """
 

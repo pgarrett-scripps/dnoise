@@ -229,6 +229,19 @@ just check     # clippy -D warnings + fmt check + tests
 `tests/filter.rs` checks streak retention, gap-closing, window aggregation, and
 iteration monotonicity; `tests/average.rs` covers the running-average pre-pass.
 
+## Reproducing the paper
+
+The benchmark suite, manuscript, and Supporting Information that accompany the
+dnoise paper live under [`benchmark/`](benchmark/) and [`paper/`](paper/). The
+exact state used for the paper is frozen on the [`paper`](../../tree/paper)
+branch, so every figure, table, and PDF can be regenerated as published while
+`main` tracks ongoing development. Start from
+[`benchmark/README.md`](benchmark/README.md), which lists, in order, the commands
+that rebuild each manuscript asset from the raw `.d` files (PRIDE
+[PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)). Rust deps
+are pinned in `Cargo.lock`; the Python analysis env is pinned in
+`benchmark/pyproject.toml` + `benchmark/uv.lock` (run via `uv`).
+
 ## License
 
 Licensed under the [MIT License](LICENSE-MIT).

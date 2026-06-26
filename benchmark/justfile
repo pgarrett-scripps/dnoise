@@ -79,6 +79,8 @@ si-assets:
   uv run scripts/28_perrun_stats.py
   # SI: peptide-rule sensitivity (prints numbers for tab:peptide-rule, hand-entered)
   uv run scripts/29_peptide_rule_sensitivity.py
+  # SI: MS1-derived vs MS2-MaxLFQ DIA quant (tab:dia-ms1-quant / Table S12)
+  uv run scripts/54_ms1_quant_dia.py dia_5min dia_15min
   # MS/MS before/after frames (DDA + DIA)
   uv run scripts/18_msms_frame_figure.py dda_5min
   uv run scripts/18_msms_frame_figure.py dia_5min
