@@ -6,9 +6,11 @@
 pub struct FilterParams {
     /// Column half-width in TOF indices: window spans `[c - w, c + w]`.
     pub mz_half_width: u32,
-    /// Minimum total span (gap-inclusive, in scans) of a kept run.
+    /// Minimum number of occupied scans in a kept run (bridged gaps do not count).
     pub min_feature_length: usize,
-    /// Max consecutive empty scans tolerated inside a feature (morph-close radius).
+    /// Max consecutive empty scans tolerated inside a feature (morph-close radius);
+    /// bridged scans coalesce neighbouring occupied scans into one run but are not
+    /// themselves counted toward `min_feature_length`.
     pub max_internal_gap: usize,
     /// Per-scan summed-intensity floor for marking a scan occupied.
     pub min_window_intensity: u64,
@@ -23,7 +25,7 @@ impl Default for FilterParams {
         Self {
             mz_half_width: 3,
             min_feature_length: 5,
-            max_internal_gap: 1,
+            max_internal_gap: 2,
             min_window_intensity: 0,
             min_feature_intensity: 0,
             num_iterations: 2,
@@ -181,6 +183,23 @@ impl Default for DiaMs1WindowParams {
     }
 }
 
+/// Knobs for the MS1 selection-polygon gate ([`crate::polygon`]). timsTOF PASEF
+/// methods restrict precursor selection to a polygon in the `(m/z, 1/K0)` plane
+/// (the "IMS PolygonFilter", stored in `analysis.tdf`). MS1 signal outside it sits
+/// where the instrument never schedules fragmentation, so for ddaPASEF it is never
+/// a precursor and can be dropped from the survey scans. The polygon itself comes
+/// from the data; the pads add physical-unit leniency so a precursor near an edge
+/// keeps its isotopic envelope (m/z) and mobility spread (1/K0). `0.0`/`0.0`
+/// reproduces the literal polygon.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ms1PolygonParams {
+    /// m/z leniency added to each side of the polygon interior, in **Daltons**
+    /// (isotopes run to higher m/z, spaced `1/charge` Da).
+    pub mz_pad: f64,
+    /// Ion-mobility leniency added to each side, in **1/K0**.
+    pub im_pad: f64,
+}
+
 /// Vertical-filter knobs for the ddaPASEF MS/MS path ([`crate::msms`]). Mirrors
 /// [`FilterParams`] but with defaults tuned for the short (~25-scan) precursor
 /// isolation windows: a smaller `min_feature_length`.
@@ -188,7 +207,7 @@ impl Default for DiaMs1WindowParams {
 pub struct MsmsFilterParams {
     /// Column half-width in TOF indices.
     pub mz_half_width: u32,
-    /// Minimum total span (scans) of a kept run.
+    /// Minimum number of occupied scans in a kept run (bridged gaps do not count).
     pub min_feature_length: usize,
     /// Max consecutive empty scans tolerated inside a feature.
     pub max_internal_gap: usize,
@@ -225,4 +244,64 @@ impl MsmsFilterParams {
             num_iterations: self.num_iterations,
         }
     }
+}
+
+/// Optional pipeline stages layered on top of the core vertical-IM filter
+/// ([`FilterParams`]), passed as one value to [`crate::denoise`] and
+/// [`crate::denoise_with_progress`] instead of a dozen positional arguments.
+///
+/// Every field is disabled by default ([`Stages::default`]): the bools are
+/// `false`, `frame_half_width` is `0` (off), and the `Option` stages are `None`.
+/// Enable a stage by setting its field, borrowing a parameter struct that lives
+/// for the call. Each field references the stage documented on its target module.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Stages<'a> {
+    /// Filter MS/MS frames too. When `false` (default), only MS1 frames are
+    /// filtered and MS/MS frames are re-encoded unchanged — the vertical-IM filter
+    /// is an MS1 algorithm that strips most MS/MS fragment signal.
+    pub filter_all_frames: bool,
+    /// Pre-filter MS1 running-average radius (see [`crate::average`]): each MS1
+    /// frame's keep/drop decision uses the summed `2*r+1` MS1-frame neighborhood.
+    /// `0` (default) reproduces the unsmoothed pipeline. MS/MS frames are never
+    /// averaged.
+    pub frame_half_width: usize,
+    /// Horizontal-halo filter ([`crate::halo`]) after the vertical filter, removing
+    /// the weak m/z halo flanking bright peaks. `None` disables it.
+    pub halo: Option<&'a HaloParams>,
+    /// Denoise MS/MS frames with these knobs instead of passing them through. The
+    /// acquisition scheme is auto-detected: ddaPASEF combines each precursor's
+    /// fragment scans across frames before filtering (see [`crate::msms`]);
+    /// diaPASEF runs the same filter on each whole MS/MS frame. `None` leaves MS/MS
+    /// unchanged.
+    pub denoise_msms: Option<&'a MsmsFilterParams>,
+    /// Box-averaging smoother ([`crate::smooth`]) on each filtered frame's
+    /// survivors (after halo, before centroiding) to stabilise watershed seeding.
+    /// `None` disables it.
+    pub smooth: Option<&'a SmoothParams>,
+    /// Watershed centroider ([`crate::watershed`]) as the final stage, collapsing
+    /// survivors into intensity-weighted centroids. Mutually exclusive with
+    /// `box_centroid`. `None` disables it.
+    pub watershed: Option<&'a WatershedParams>,
+    /// Greedy small-box centroider ([`crate::box_centroid`]) as the final stage,
+    /// tiling streaks into small centroids rather than collapsing them. Mutually
+    /// exclusive with `watershed`. `None` disables it.
+    pub box_centroid: Option<&'a BoxCentroidParams>,
+    /// diaPASEF MS/MS out-of-window gate ([`crate::dia_window`]): drop fragment
+    /// points whose mobility scan falls outside every isolation window for their
+    /// frame. No effect on ddaPASEF. `None` disables it.
+    pub dia_window: Option<&'a DiaWindowParams>,
+    /// diaPASEF per-window MS/MS filtering ([`crate::dia_window::filter_per_window`]):
+    /// run the MS/MS filter independently inside each isolation window's scan slice
+    /// instead of over the whole frame. Applies wherever the MS/MS filter runs;
+    /// ignored on ddaPASEF.
+    pub dia_per_window: bool,
+    /// diaPASEF MS1 out-of-window gate ([`crate::dia_ms1`]): drop MS1 points whose
+    /// `(m/z, mobility)` falls outside every padded isolation window. No effect on
+    /// ddaPASEF. `None` disables it.
+    pub dia_ms1: Option<&'a DiaMs1WindowParams>,
+    /// ddaPASEF MS1 selection-polygon gate ([`crate::polygon`]): drop MS1 points
+    /// outside the run's IMS PolygonFilter (never-selected precursor space).
+    /// Auto-detected; skipped on diaPASEF and when the run stores no polygon.
+    /// `None` disables it.
+    pub ms1_polygon: Option<&'a Ms1PolygonParams>,
 }

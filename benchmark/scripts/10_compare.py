@@ -26,13 +26,25 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+# Keep all lettering >= 4.5 pt once the figure is downscaled to the text width.
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 11,
+    "figure.titlesize": 15,
+})
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "results" / "compare"
 ARMS = ["original", "denoised", "msms"]
 ARM_LABEL = {"original": "raw", "denoised": "MS1", "msms": "MS1+MS/MS"}
-ARM_COLOR = {"original": "#1f77b4", "denoised": "#d62728", "msms": "#2ca02c"}
+# Colorblind-safe (Wong, Nat. Methods 2011); avoids the red/green pairing.
+ARM_COLOR = {"original": "#0072B2", "denoised": "#E69F00", "msms": "#009E73"}
 
 
 def load(dataset: str) -> dict | None:
@@ -107,12 +119,12 @@ def main() -> int:
             vals = [valfn(r, arm) for r in recs]
             off = (-(len(present_arms) - 1) / 2 + j) * w
             bars = ax.bar(x + off, vals, w, label=ARM_LABEL[arm], color=ARM_COLOR[arm])
-            ax.bar_label(bars, fmt=fmt, fontsize=7)
+            ax.bar_label(bars, fmt=fmt, fontsize=11)
         ax.set_xticks(x)
         ax.set_xticklabels(labels)
         ax.set_title(title)
         ax.set_ylabel(ylabel)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=11)
 
     def sval(r, arm, col):
         s = r["summary"]

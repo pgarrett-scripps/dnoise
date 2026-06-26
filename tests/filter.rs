@@ -41,8 +41,35 @@ fn keeps_long_vertical_streak_drops_isolated() {
 }
 
 #[test]
+fn length_counts_occupied_scans_not_gap_inclusive_span() {
+    // Occupied scans 10,12,14 with max_internal_gap=1 coalesce into one run spanning
+    // [10,14] (gap-inclusive span 5) but containing only 3 occupied scans. Length is
+    // the occupied count, so this must be DROPPED at min_feature_length=5 (it would
+    // have been KEPT under the old gap-inclusive-span rule).
+    let pts: Vec<(u32, u32, u32)> = [10u32, 12, 14].iter().map(|&s| (s, 1000, 100)).collect();
+    let f = frame(700, &pts);
+    let params = FilterParams {
+        min_feature_length: 5,
+        max_internal_gap: 1,
+        ..Default::default()
+    };
+    let keep = filter_once(&f, &params);
+    assert!(
+        keep.iter().all(|&k| !k),
+        "3 occupied scans (< min_feature_length 5) must be dropped despite a span of 5"
+    );
+    // Lowering the threshold to the actual occupied count keeps them.
+    let p3 = FilterParams {
+        min_feature_length: 3,
+        ..params
+    };
+    assert!(filter_once(&f, &p3).iter().all(|&k| k));
+}
+
+#[test]
 fn gap_closing_bridges_small_gaps() {
-    // tof 1000: scans 10,11,12, gap at 13, 14,15,16 -> with max_internal_gap=1 it's one run of span 7.
+    // tof 1000: scans 10,11,12, gap at 13, 14,15,16 -> with max_internal_gap=1 they
+    // coalesce into one run of 6 occupied scans (>= min_feature_length 5).
     let pts: Vec<(u32, u32, u32)> = [10u32, 11, 12, 14, 15, 16]
         .iter()
         .map(|&s| (s, 1000, 100))

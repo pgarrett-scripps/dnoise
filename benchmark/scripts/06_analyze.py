@@ -38,9 +38,10 @@ RESULTS = ROOT / "results" / DATASET
 OUT = RESULTS / "analysis"
 # Arms compared, in order; only those with a Sage result on disk are included.
 # "msms" is the MS1+MS/MS-denoised arm (present only after a --denoise-msms run).
-CANDIDATE_ARMS = ["original", "denoised", "msms"]
+CANDIDATE_ARMS = ["original", "denoised", "intensity", "msms"]
 ARMS = [a for a in CANDIDATE_ARMS if (RESULTS / a / "results.sage.tsv").is_file()]
-ARM_COLOR = {"original": "#1f77b4", "denoised": "#d62728", "msms": "#2ca02c"}
+ARM_COLOR = {"original": "#1f77b4", "denoised": "#d62728",
+             "intensity": "#9467bd", "msms": "#2ca02c"}
 
 
 # ---------- plots ----------
@@ -180,7 +181,7 @@ def main() -> int:
     rows, prots, acc = {}, {}, []
     for arm in ARMS:
         prots[arm] = lfq_table(RESULTS / arm)
-        rows[arm] = {**id_metrics(RESULTS / arm), **lfq_metrics(prots[arm])}
+        rows[arm] = {**id_metrics(RESULTS / arm), **lfq_metrics(prots[arm], RESULTS / arm)}
         acc += pair_accuracy(arm, RESULTS / arm)
 
     summary = pd.DataFrame(rows).T

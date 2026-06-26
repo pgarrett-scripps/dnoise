@@ -1,3 +1,5 @@
+//! Dev/maintainer tool, not a usage example for the library API.
+//!
 //! Cross-check our type-2 codec against real Bruker bytes: read each frame's raw
 //! record straight from analysis.tdf_bin, decode it with our [`decode_frame_type2`],
 //! and confirm the points match what timsrust returns for the same frame.

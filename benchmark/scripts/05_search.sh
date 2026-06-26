@@ -34,6 +34,12 @@ echo "using $("$SAGE_BIN" --version)  ($SAGE_BIN)"
 run_arm () {
   local out="$1"; shift
   mkdir -p "$out"
+  # Resumable: skip a completed arm so a re-run after interruption continues
+  # instead of redoing it. Set SAGE_FORCE=1 to re-search regardless.
+  if [ "${SAGE_FORCE:-0}" != "1" ] && [ -f "$out/results.sage.tsv" ] && [ -f "$out/lfq.tsv" ]; then
+    echo "skip (exists): $(basename "$out")"
+    return 0
+  fi
   echo "=== Sage [$(basename "$out")] -> $out ==="
   "$SAGE_BIN" "$CFG" -f "$FASTA" -o "$out" --batch-size "$BATCH" "$@"
 }
@@ -43,6 +49,7 @@ raw=( "$RAW"/*.d )
 den=( "$DEN"/*.d )
 msms=( "$MSMS"/*.d )
 wshed=( "$WSHED"/*.d )
+intensity=( "$INT"/*.d )
 [ ${#raw[@]} -gt 0 ] || { echo "no raw .d in $RAW — run 03/04_unzip"; exit 1; }
 [ ${#den[@]} -gt 0 ] || { echo "no MS1-denoised .d in $DEN — run 04_denoise.sh"; exit 1; }
 
@@ -57,5 +64,10 @@ if [ ${#wshed[@]} -gt 0 ]; then
   run_arm "$RES_WSHED" "${wshed[@]}"
 else
   echo "no watershed-centroided .d in $WSHED — skipping watershed arm"
+fi
+if [ ${#intensity[@]} -gt 0 ]; then
+  run_arm "$RES_INTENSITY" "${intensity[@]}"
+else
+  echo "no intensity-threshold .d in $INT — skipping intensity arm"
 fi
 echo "done."

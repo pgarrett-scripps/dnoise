@@ -78,8 +78,16 @@ pub fn filter_once(frame: &FlatFrame, p: &FilterParams) -> Vec<bool> {
                          run_end: usize,
                          profile: &[u64],
                          spans: &mut Vec<(usize, usize)>| {
-                let span = run_end - run_start + 1;
-                if span < p.min_feature_length {
+                // Length is the number of OCCUPIED scans in the run, not the
+                // gap-inclusive end-to-end span: scans bridged by `max_internal_gap`
+                // (profile == 0, or below the window floor) do not count, so
+                // `min_feature_length` means "this many points actually seen". The
+                // kept range stays [run_start, run_end]; only acceptance changes.
+                let occupied_count = profile[run_start..=run_end]
+                    .iter()
+                    .filter(|&&v| v > 0 && v >= p.min_window_intensity)
+                    .count();
+                if occupied_count < p.min_feature_length {
                     return;
                 }
                 let total: u64 = profile[run_start..=run_end].iter().sum();

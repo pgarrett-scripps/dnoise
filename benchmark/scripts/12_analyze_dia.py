@@ -33,15 +33,28 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+# Keep all lettering >= 4.5 pt once the figure is downscaled to the text width.
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 11,
+    "figure.titlesize": 15,
+})
 import pandas as pd
 from matplotlib.patches import Patch
 
 from _metrics import (
     EXPECTED,
+    MIN_PEPTIDES_PER_PROTEIN,
     PAIRS,
     SPECIES,
     condition_of,
     expected_log2,
+    median_ci,
     norm_factors,
 )
 
@@ -52,7 +65,8 @@ OUT = RESULTS / "analysis"
 FASTA = ROOT / "data" / "fasta" / "hybrid.fasta"  # the prefixed (Sage) FASTA
 
 CANDIDATE_ARMS = ["original", "denoised", "msms"]
-ARM_COLOR = {"original": "#1f77b4", "denoised": "#d62728", "msms": "#2ca02c"}
+# Colorblind-safe (Wong, Nat. Methods 2011); avoids the red/green pairing.
+ARM_COLOR = {"original": "#0072B2", "denoised": "#E69F00", "msms": "#009E73"}
 
 
 # ---------- species map (accession -> HUMAN/YEAST/ECOLI, else None) ----------
@@ -100,9 +114,27 @@ def load_matrix(path: Path) -> tuple[pd.DataFrame, list[str]]:
     return df, run_cols
 
 
+def pg_peptides(arm_dir: Path) -> pd.DataFrame | None:
+    """Distinct (protein group, peptide-sequence) pairs from the precursor matrix,
+    for the two-peptide rule and the quantified-peptide count. DIA-NN matrices are
+    already FDR-filtered, so every listed precursor is a quantified peptide ion."""
+    pr = arm_dir / "report.pr_matrix.tsv"
+    if not pr.is_file():
+        return None
+    df, _ = load_matrix(pr)
+    if "Protein.Group" not in df.columns:
+        return None
+    seqcol = "Stripped.Sequence" if "Stripped.Sequence" in df.columns else "Modified.Sequence"
+    sub = df[["Protein.Group", seqcol]].dropna()
+    sub.columns = ["protein", "peptide"]
+    return sub.astype(str).drop_duplicates()
+
+
 def pg_table(arm_dir: Path, acc2sp: dict[str, str]) -> pd.DataFrame | None:
     """Per-protein-group, per-run MaxLFQ intensities, total-intensity normalized,
-    tagged by species. One row per protein group (DIA-NN already rolled up)."""
+    tagged by species. One row per protein group (DIA-NN already rolled up).
+    Protein groups are restricted to those supported by
+    >= MIN_PEPTIDES_PER_PROTEIN distinct peptide sequences (two-peptide rule)."""
     p = arm_dir / "report.pg_matrix.tsv"
     if not p.is_file():
         return None
@@ -114,7 +146,24 @@ def pg_table(arm_dir: Path, acc2sp: dict[str, str]) -> pd.DataFrame | None:
     out = pd.DataFrame({"protein": df["Protein.Group"].astype(str)})
     out["species"] = out["protein"].map(lambda g: species_of_pg(g, acc2sp))
     out = pd.concat([out, vals], axis=1)
+    if MIN_PEPTIDES_PER_PROTEIN > 1:
+        peps = pg_peptides(arm_dir)
+        if peps is not None:
+            counts = peps.groupby("protein")["peptide"].nunique()
+            keep = set(counts[counts >= MIN_PEPTIDES_PER_PROTEIN].index)
+            out = out[out["protein"].isin(keep)]
     return out
+
+
+def quant_peptide_count(arm_dir: Path, p: pd.DataFrame | None) -> int:
+    """Distinct quantified peptide sequences mapping to the quantified protein
+    groups in `p` (the set reported by `lfq_frame` for this arm)."""
+    if p is None or p.empty:
+        return 0
+    peps = pg_peptides(arm_dir)
+    if peps is None:
+        return 0
+    return int(peps[peps["protein"].isin(set(p["protein"]))]["peptide"].nunique())
 
 
 def cond_cols(run_cols: list[str], cond: str) -> list[str]:
@@ -165,10 +214,12 @@ def lfq_frame(prot: pd.DataFrame | None) -> pd.DataFrame | None:
     return p
 
 
-def lfq_metrics(p: pd.DataFrame | None) -> dict:
+def lfq_metrics(p: pd.DataFrame | None, arm_dir: Path | None = None) -> dict:
     if p is None or p.empty:
-        return {"n_quantified": 0}
+        return {"n_quantified": 0, "n_quant_peptide": 0}
     m = {"n_quantified": len(p)}
+    if arm_dir is not None:
+        m["n_quant_peptide"] = quant_peptide_count(arm_dir, p)
     cv = pd.concat([p["cv_A"], p["cv_B"]]).dropna()
     m["median_cv"] = float(cv.median())
     for sp in SPECIES:
@@ -200,9 +251,11 @@ def pair_accuracy(arm: str, prot: pd.DataFrame | None) -> list[dict]:
             sub = ratio[prot["species"] == sp].dropna()
             if len(sub) == 0:
                 continue
+            lo, hi = median_ci(sub.values)
             out.append({"arm": arm, "pair": f"{a}/{b}", "species": sp,
                         "expected": expected_log2(a, b, sp),
-                        "observed": float(sub.median()), "n": len(sub)})
+                        "observed": float(sub.median()), "ci_lo": lo, "ci_hi": hi,
+                        "n": len(sub)})
     return out
 
 
@@ -218,7 +271,7 @@ def plot_ids(summary: pd.DataFrame, arms: list[str]) -> None:
     for i, arm in enumerate(arms):
         vals = [summary.loc[arm, m] for m in metrics]
         bars = ax.bar(x + (-(n - 1) / 2 + i) * w, vals, w, label=arm, color=ARM_COLOR.get(arm))
-        ax.bar_label(bars, fmt="%d", fontsize=7)
+        ax.bar_label(bars, fmt="%d", fontsize=11)
     ax.set_xticks(x)
     ax.set_xticklabels(metrics)
     ax.set_ylabel("count @ 1% FDR")
@@ -324,7 +377,7 @@ def main() -> int:
     for arm in arms:
         prot = pg_table(RESULTS / arm, acc2sp)
         frames[arm] = lfq_frame(prot)
-        rows[arm] = {**id_metrics(RESULTS / arm, acc2sp), **lfq_metrics(frames[arm])}
+        rows[arm] = {**id_metrics(RESULTS / arm, acc2sp), **lfq_metrics(frames[arm], RESULTS / arm)}
         acc += pair_accuracy(arm, prot)
 
     summary = pd.DataFrame(rows).T.reindex(sorted({k for r in rows.values() for k in r}), axis=1)

@@ -1,3 +1,5 @@
+//! Dev/maintainer tool, not a usage example for the library API.
+//!
 //! CPU-bound profiling harness for the per-frame denoise work.
 //!
 //! Loads real MS1 frames from a `.d` folder once (untimed), then loops the

@@ -7,10 +7,10 @@
 # --- Vertical ion-mobility feature filter (the core denoiser) ---
 # Column half-width in TOF indices (window spans [c - w, c + w]).
 mz_half_width = 3
-# Minimum total span (scans) of a kept feature.
+# Minimum number of occupied scans in a kept feature (bridged gaps do not count).
 min_feature_length = 5
-# Max empty scans tolerated inside a feature.
-max_internal_gap = 1
+# Max consecutive empty scans tolerated (bridged) inside a feature.
+max_internal_gap = 2
 # Per-scan summed-intensity floor for occupancy.
 min_window_intensity = 0
 # Total summed-intensity floor for a kept feature.
@@ -32,8 +32,8 @@ halo_scan_half_width = 2
 # MS/MS spectra and identifications; enable to benchmark its effect on IDs.
 denoise_msms = false
 msms_mz_half_width = 3
-msms_min_feature_length = 2
-msms_max_internal_gap = 5
+msms_min_feature_length = 3
+msms_max_internal_gap = 8
 msms_min_window_intensity = 0
 msms_min_feature_intensity = 0
 msms_iterations = 1

@@ -1,0 +1,21 @@
+# Strict intensity-threshold baseline for the 15-minute ddaPASEF gradient.
+#
+# Same control arm as dnoise.intensity.toml (a pure per-point intensity threshold:
+# keep iff intensity >= min_window_intensity; see that file for why the config
+# collapses to a threshold). T is re-calibrated per gradient so the threshold
+# removes the same fraction of MS1 points as the streak filter on that gradient.
+#
+# Note: the streak filter uses ONE shared config (dnoise.toml) across both
+# gradients, whereas a fixed intensity threshold does not transfer: the 5-minute
+# match (T=86) over-removes on the denser 15-minute frames. T = 82 was calibrated
+# on the dda_15min runs to match the streak filter's ~82.8% MS1-point removal
+# (control removes 84.1%); see benchmark/justfile `intensity`.
+
+mz_half_width = 0
+min_feature_length = 1
+max_internal_gap = 0
+min_window_intensity = 82
+min_feature_intensity = 0
+iterations = 1
+halo = false
+all_frames = false

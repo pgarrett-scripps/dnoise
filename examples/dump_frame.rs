@@ -28,11 +28,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let flat = FlatFrame::from_frame(&frame);
 
     let mut w = std::io::BufWriter::new(std::fs::File::create(&out)?);
-    writeln!(w, "mz,one_over_k0,intensity")?;
+    writeln!(w, "mz,one_over_k0,intensity,scan,tof")?;
     for i in 0..flat.len() {
         let mz = meta.mz_converter.convert(flat.tof[i]);
         let im = meta.im_converter.convert(flat.scan[i]);
-        writeln!(w, "{mz:.5},{im:.5},{}", flat.intensity[i])?;
+        writeln!(
+            w,
+            "{mz:.5},{im:.5},{},{},{}",
+            flat.intensity[i], flat.scan[i], flat.tof[i]
+        )?;
     }
     eprintln!("wrote {} points to {out}", flat.len());
     Ok(())

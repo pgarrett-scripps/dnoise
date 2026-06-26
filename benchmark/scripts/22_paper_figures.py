@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Draft main-text figures from the computed dda_5min arms:
+"""Draft main-text figures from the computed dda_5min / dia arms:
 
-  Fig 5 (centroiders): original vs watershed vs box   -> paper/figures/fig5_centroiders.png
-  Fig 6 (Bruker):      original vs dnoise vs bruker(default, matched)
-                                                       -> paper/figures/fig6_bruker.png
+  Fig 3 (DDA):         original vs MS1 vs MS1+MS/MS    -> paper/figures/fig3_dda.png
+  Fig 4 (DIA):         original vs MS1 vs MS1+MS/MS    -> paper/figures/fig4_dia.png
+  Fig 5 (centroiders): original vs watershed vs box    -> paper/figures/fig5_centroiders.png
 
 Each: 3 panels — data reduction (MS1 kept % + binary %), quantified proteins
 (1% FDR), and LFQ accuracy (observed vs expected median log2 across all pairs/
@@ -25,7 +25,23 @@ import numpy as np
 import pandas as pd
 from _metrics import SPECIES, id_metrics, lfq_metrics, lfq_table, pair_accuracy, stats
 
-ARM3_COLOR = {"original": "#1f77b4", "denoised": "#d62728", "msms": "#2ca02c"}
+# Figures are placed at the full ~6.3 in text width; they are authored larger and
+# downscaled, so fonts must be large enough that nothing drops below 4.5 pt at
+# print. With the smallest text at 11 pt and the most-downscaled figure (~0.42x),
+# 11 x 0.42 = 4.65 pt > 4.5 pt.
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 11,
+    "figure.titlesize": 15,
+})
+
+# Colorblind-safe qualitative palette (Wong, Nat. Methods 2011); avoids the
+# red/green pairing. Species are additionally distinguished by marker shape.
+ARM3_COLOR = {"original": "#0072B2", "denoised": "#E69F00", "msms": "#009E73"}
 ARM3_LABEL = {"original": "original", "denoised": "MS1", "msms": "MS1+MS/MS"}
 # arm -> data .d subdir (results subdir is the arm name itself)
 ARM3_DATA = {"original": "raw", "denoised": "denoised", "msms": "denoised_msms"}
@@ -37,12 +53,10 @@ DATA = ROOT / "data" / "dda_5min"
 
 # label -> (data .d subdir, results subdir, color)
 ARM = {
-    "original":       ("raw",            "original",       "#1f77b4"),
-    "dnoise":         ("denoised",       "denoised",       "#d62728"),
-    "watershed":      ("watershed",      "watershed",      "#2ca02c"),
-    "box":            ("box",            "box",            "#ff7f0e"),
-    "bruker (default)": ("bruker_default", "bruker_default", "#9467bd"),
-    "bruker (matched)": ("bruker",        "bruker",         "#8c564b"),
+    "original":       ("raw",            "original",       "#0072B2"),
+    "dnoise":         ("denoised",       "denoised",       "#E69F00"),
+    "watershed":      ("watershed",      "watershed",      "#009E73"),
+    "box":            ("box",            "box",            "#D55E00"),
 }
 MARK = {"HUMAN": "o", "YEAST": "s", "ECOLI": "^"}
 
@@ -76,23 +90,23 @@ def collect(labels: list[str]) -> dict:
 
 def make_fig(labels: list[str], title: str, out: Path) -> None:
     rows = collect(labels)
-    fig, ax = plt.subplots(1, 3, figsize=(15, 4.5))
+    fig, ax = plt.subplots(1, 3, figsize=(12, 4.2))
 
     # Panel 1: data reduction (MS1 kept %, binary %)
     x = np.arange(len(labels))
     w = 0.38
-    ax[0].bar(x - w / 2, [rows[l]["ms1_pct"] for l in labels], w, label="MS1 peaks", color="#4c72b0")
-    ax[0].bar(x + w / 2, [rows[l]["bin_pct"] for l in labels], w, label="binary size", color="#dd8452")
+    ax[0].bar(x - w / 2, [rows[l]["ms1_pct"] for l in labels], w, label="MS1 peaks", color="#0072B2")
+    ax[0].bar(x + w / 2, [rows[l]["bin_pct"] for l in labels], w, label="binary size", color="#E69F00")
     ax[0].axhline(100, color="gray", lw=0.8, ls="--")
     ax[0].set_ylabel("% of original (18 runs)")
     ax[0].set_title("Data reduction")
     ax[0].set_xticks(x); ax[0].set_xticklabels(labels, rotation=25, ha="right")
-    ax[0].legend(fontsize=8)
+    ax[0].legend(fontsize=11)
 
     # Panel 2: quantified proteins
     bars = ax[1].bar(x, [rows[l]["n_quant"] for l in labels],
                      color=[rows[l]["color"] for l in labels])
-    ax[1].bar_label(bars, fmt="%d", fontsize=8)
+    ax[1].bar_label(bars, fmt="%d", fontsize=11)
     ax[1].set_ylabel("proteins quantified (1% FDR)")
     ax[1].set_title("Quantification coverage")
     ax[1].set_xticks(x); ax[1].set_xticklabels(labels, rotation=25, ha="right")
@@ -105,12 +119,12 @@ def make_fig(labels: list[str], title: str, out: Path) -> None:
     for lab in labels:
         for a in rows[lab]["acc"]:
             ax[2].scatter(a["expected"], a["observed"], color=rows[lab]["color"],
-                          marker=MARK[a["species"]], s=40, alpha=0.8)
+                          marker=MARK[a["species"]], s=60, alpha=0.8)
         ax[2].scatter([], [], color=rows[lab]["color"], label=lab)  # legend proxy
     ax[2].set_xlim(*lim); ax[2].set_ylim(*lim)
     ax[2].set_xlabel("expected log2 ratio"); ax[2].set_ylabel("observed median log2")
     ax[2].set_title("LFQ accuracy (○ human △ ecoli □ yeast)")
-    ax[2].legend(fontsize=7)
+    ax[2].legend(fontsize=11)
 
     fig.suptitle(title, fontsize=13)
     fig.tight_layout()
@@ -136,7 +150,7 @@ def _acc_scatter(ax, series, title="LFQ accuracy (○ human △ ecoli □ yeast)
     for color, acc in series:
         for a in acc:
             ax.scatter(a["expected"], a["observed"], color=color,
-                       marker=MARK[a["species"]], s=35, alpha=0.75)
+                       marker=MARK[a["species"]], s=60, alpha=0.75)
     ax.set_xlim(*lim); ax.set_ylim(*lim)
     ax.set_xlabel("expected log2 ratio"); ax.set_ylabel("observed median log2")
     ax.set_title(title)
@@ -148,30 +162,30 @@ def _arm3_quad(binpct, quant, acc, arms, grads, title, out) -> None:
       bottom: LFQ accuracy, a separate panel per gradient.
     binpct/quant: {grad: [per-arm]}; acc: {grad: [(arm_color, accuracy-dicts)]}."""
     x = np.arange(len(arms)); w = 0.38
-    GC = {"5min": "#4c72b0", "15min": "#dd8452"}
+    GC = {"5min": "#0072B2", "15min": "#E69F00"}
     GL = {"5min": "5 min", "15min": "15 min"}
     fig, ax = plt.subplots(2, 2, figsize=(12, 9))
     # [0,0] data reduction (binary % of raw), grouped by gradient
     a = ax[0, 0]
     for i, g in enumerate(grads):
         bars = a.bar(x + (i - 0.5) * w, binpct[g], w, label=GL[g], color=GC[g])
-        a.bar_label(bars, fmt="%.0f", fontsize=7, padding=1)
+        a.bar_label(bars, fmt="%.0f", fontsize=11, padding=1)
     a.axhline(100, color="gray", lw=0.8, ls="--")
     a.set_ylabel("frame binary, % of raw"); a.set_title("Data reduction")
-    a.set_xticks(x); a.set_xticklabels([ARM3_LABEL[m] for m in arms]); a.legend(fontsize=8)
+    a.set_xticks(x); a.set_xticklabels([ARM3_LABEL[m] for m in arms]); a.legend(fontsize=11)
     # [0,1] quantified proteins, grouped by gradient
     a = ax[0, 1]
     for i, g in enumerate(grads):
         bars = a.bar(x + (i - 0.5) * w, quant[g], w, label=GL[g], color=GC[g])
-        a.bar_label(bars, fmt="%d", fontsize=7, padding=1)
+        a.bar_label(bars, fmt="%d", fontsize=11, padding=1)
     a.set_ylabel("proteins quantified (1% FDR)"); a.set_title("Quantification coverage")
-    a.set_xticks(x); a.set_xticklabels([ARM3_LABEL[m] for m in arms]); a.legend(fontsize=8, loc="upper left")
+    a.set_xticks(x); a.set_xticklabels([ARM3_LABEL[m] for m in arms]); a.legend(fontsize=11, loc="upper left")
     # [1,0],[1,1] LFQ accuracy, one panel per gradient (arms colored)
     for col, g in enumerate(grads):
         _acc_scatter(ax[1, col], acc[g], title=f"LFQ accuracy, {GL[g]} (○ human △ ecoli □ yeast)")
     for m in arms:
         ax[1, 0].scatter([], [], color=ARM3_COLOR[m], label=ARM3_LABEL[m])
-    ax[1, 0].legend(fontsize=7)
+    ax[1, 0].legend(fontsize=11)
     fig.suptitle(title, fontsize=13)
     fig.tight_layout(); fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig); print(f"wrote {out}")
@@ -225,9 +239,6 @@ def main() -> int:
     make_fig(["original", "watershed", "box"],
              "Optional centroiding (MS1-only; identifications unchanged)",
              FIGS / "fig5_centroiders.png")
-    make_fig(["original", "dnoise", "bruker (default)", "bruker (matched)"],
-             "dnoise vs Bruker Minesweeper (MS1-only; identifications unchanged)",
-             FIGS / "fig6_bruker.png")
     return 0
 
 

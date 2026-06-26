@@ -1,34 +1,20 @@
 # TODO — before JPR submission
 
-## ⚠️ BLOCKER: DIA 15-min searched against the WRONG library (not yet fixed)
-The two diaPASEF gradients used DIFFERENT DIA-NN libraries, so their absolute
-counts are NOT comparable across gradients:
-  - dia_5min  -> hybrid_diann_dda10  (restricted DDA-10%-FDR allowlist):
-                 9,305 isoforms / 12,321 groups / 1.77M precursors  (432 MB speclib)
-  - dia_15min -> hybrid_diann        (FULL ~31k proteome, no allowlist):
-                 31,390 isoforms / 41,867 groups / 4.84M precursors (1.18 GB speclib)
-Cause: /tmp/dia15_run.sh never set DIANN_FASTA, so 11_diann.sh defaulted to the
-full FASTA. Within-gradient cross-arm (denoise) comparison is still VALID; only
-the 5-min-vs-15-min absolute counts are on different bases.
-Affected if not fixed: @fig:dia coverage panel (5min restricted vs 15min full),
-its caption line "Counts are within the DDA-detectable proteome the search was
-restricted to" (true for 5min, FALSE for 15min), and SI §S7 two-gradient prose.
-
-FIX (recommended): re-run the 18 dia_15min runs x3 arms against the restricted
-library so both gradients match and the existing SI rationale holds. Everything is
-on disk:
-    cd benchmark
-    DIANN_FASTA=$PWD/data/fasta/hybrid_diann_dda10.fasta \
-      DATASET=dia_15min just diann          # (or scripts/11_diann.sh)
-    DATASET=dia_15min just analyze-dia       # 12_analyze_dia.py -> summary/accuracy.csv
-    uv run scripts/22_paper_figures.py       # regen fig4_dia.png
-Then finish SI §S7: per_run_dia_15min.typ table is ALREADY generated; expand the
-DIA summary table (tab:dia-5min) to both gradients and write the IDs/LFQ prose.
-(~5-8h compute; restricted lib is ~2.7x smaller than the full one already run.)
-
-NOTE: S7 reduction prose + per-run tables (both gradients) are already updated and
-correct — the data-volume numbers are library-independent. Only the DIA
-IDs/quantification (summary table + prose) is blocked on the re-run above.
+## ✅ RESOLVED (2026-06-14): DIA library mismatch fixed — both gradients now FULL proteome
+The two diaPASEF gradients had used DIFFERENT DIA-NN libraries (5-min = restricted
+DDA-10%-FDR allowlist hybrid_diann_dda10; 15-min = full hybrid_diann), so absolute
+counts were not comparable. FIX TAKEN: re-ran the 18 dia_5min runs x3 arms against
+the FULL proteome library (matching 15-min). Now BOTH gradients use hybrid_diann
+(31,390 isoforms / 41,867 groups / 4.84M precursors) — directly comparable.
+  - Old restricted dia_5min results backed up at results/dia_5min_restricted_bak.
+  - fig4_dia.png regenerated (coverage panel now full-lib for both gradients).
+  - SI §S7: dropped the restricted-allowlist rationale; @tab:dia-2grad is the new
+    two-gradient (7-col) DIA IDs/LFQ table; prose rewritten for both gradients.
+  - Main @fig:dia caption: "restricted proteome" line replaced with "same full
+    predicted proteome library".
+  - paper.pdf + supplementary.pdf recompile clean; no leftover restriction text.
+New dia_5min full-lib counts (orig/MS1/+MS/MS): precursors 59,343/59,592/57,137;
+protein groups 9,537/9,537/9,296; quantified 8,968/8,926/8,673.
 
 ## Other pre-submission blockers (from review 2026-06-12)
 - Front matter missing (JPR/ACS): co-authors, affiliation (Dept [TODO]), ORCID,

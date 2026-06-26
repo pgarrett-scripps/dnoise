@@ -75,21 +75,46 @@ DIGEST=(
 # `|| true` so a no-match (ls fails under pipefail) doesn't abort the script.
 resolve_speclib() { ls -t "$LIBDIR"/*.speclib 2>/dev/null | head -1 || true; }
 
-# 1. Predict the spectral library ONCE from the hybrid FASTA (cached + reused).
-SPECLIB="$(resolve_speclib)"
-if [ -z "$SPECLIB" ]; then
-  echo "=== predicting spectral library from $(basename "$FASTA") (one-time) ==="
-  echo "    log: $LIBDIR/gen_lib.log"
-  diann \
-    --fasta "$DIANN_FASTA" --fasta-search --gen-spec-lib --predictor \
-    "${DIGEST[@]}" --threads "$THREADS" \
-    --out-lib "$LIBDIR/hybrid.tsv" \
-    > "$LIBDIR/gen_lib.log" 2>&1
+# 1. Spectral library.
+# DEFAULT (DIANN_REUSE_RAW_LIB=1): reuse the raw (original-arm) empirical library
+# instead of the predicted one. The original arm searches RAW .d data, which is
+# unchanged by denoising, so results/<DATASET>/original/report-lib.parquet is a
+# clean, denoise-INDEPENDENT 1%-precursor-FDR library (~61k precursors). Searching
+# the denoised/msms arms against it is far faster than the 4.84M-precursor
+# predicted library (the ~8 h/full-search step), scopes every arm to the same
+# raw-detectable precursor set, and lets us keep the original arm's existing
+# results untouched (raw data + library + binary are all unchanged).
+# CAVEAT (state in the paper): this scopes DIA to the raw-detectable proteome, so
+# it measures denoise effects on QUANT of that set, not de novo ID gains. Set
+# DIANN_FULL_LIB=1 to fall back to predict-from-FASTA + per-arm reanalyse on every
+# arm (the slow, ID-unbiased path).
+REUSE_RAW_LIB="${DIANN_REUSE_RAW_LIB:-1}"
+RAW_LIB="$RES_ORIGINAL/report-lib.parquet"
+REUSE_ACTIVE=0
+if [ "${DIANN_FULL_LIB:-0}" != "1" ] && [ "$REUSE_RAW_LIB" = "1" ] && [ -f "$RAW_LIB" ]; then
+  SPECLIB="$RAW_LIB"
+  REUSE_ACTIVE=1
+  echo "REUSE raw empirical library: $SPECLIB"
+  echo "  (skipping FASTA prediction and the original arm; raw data is unchanged)"
+else
+  if [ "${DIANN_FULL_LIB:-0}" != "1" ] && [ "$REUSE_RAW_LIB" = "1" ]; then
+    echo "raw library not found ($RAW_LIB) -- falling back to predicted library."
+  fi
   SPECLIB="$(resolve_speclib)"
   if [ -z "$SPECLIB" ]; then
-    echo "library prediction produced no .speclib -- see $LIBDIR/gen_lib.log:" >&2
-    tail -20 "$LIBDIR/gen_lib.log" >&2
-    exit 1
+    echo "=== predicting spectral library from $(basename "$FASTA") (one-time) ==="
+    echo "    log: $LIBDIR/gen_lib.log"
+    diann \
+      --fasta "$DIANN_FASTA" --fasta-search --gen-spec-lib --predictor \
+      "${DIGEST[@]}" --threads "$THREADS" \
+      --out-lib "$LIBDIR/hybrid.tsv" \
+      > "$LIBDIR/gen_lib.log" 2>&1
+    SPECLIB="$(resolve_speclib)"
+    if [ -z "$SPECLIB" ]; then
+      echo "library prediction produced no .speclib -- see $LIBDIR/gen_lib.log:" >&2
+      tail -20 "$LIBDIR/gen_lib.log" >&2
+      exit 1
+    fi
   fi
 fi
 echo "spectral library: $SPECLIB"
@@ -104,6 +129,12 @@ run_arm() {
     return 0
   fi
   mkdir -p "$outdir"
+  # Resumable: skip a completed arm so a re-run after interruption continues
+  # instead of redoing it (DIA-NN arms are long). Set DIANN_FORCE=1 to override.
+  if [ "${DIANN_FORCE:-0}" != "1" ] && [ -f "$outdir/report.parquet" ]; then
+    echo "skip (exists): $(basename "$outdir")"
+    return 0
+  fi
   echo "=== DIA-NN [$(basename "$outdir")] : ${#ds[@]} runs -> $outdir ==="
   local args=()
   for d in "${ds[@]}"; do args+=(--f "$d"); done
@@ -119,7 +150,13 @@ run_arm() {
 [ -d "$RAW" ]  || { echo "no raw .d in $RAW -- run 04_unzip.sh"   >&2; exit 1; }
 [ -d "$DEN" ]  || { echo "no MS1-denoised .d in $DEN -- run 04_denoise.sh" >&2; exit 1; }
 
-run_arm "$RAW"  "$RES_ORIGINAL"
+if [ "$REUSE_ACTIVE" = "1" ]; then
+  echo "=== original arm: kept as-is (it IS the reused raw library; raw unchanged) ==="
+  [ -f "$RES_ORIGINAL/report.parquet" ] \
+    || echo "  WARNING: $RES_ORIGINAL/report.parquet missing -- rerun with DIANN_FULL_LIB=1" >&2
+else
+  run_arm "$RAW" "$RES_ORIGINAL"
+fi
 run_arm "$DEN"  "$RES_DENOISED"
 run_arm "$MSMS" "$RES_MSMS"   # whole-frame MS2 dnoise arm (skipped if absent)
 echo "done."

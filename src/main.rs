@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use dnoise::{
     BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
-    MsmsFilterParams, SmoothParams, WatershedParams,
+    Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
@@ -26,7 +26,7 @@ struct Cli {
     /// Column half-width in TOF indices.
     #[arg(long)]
     mz_half_width: Option<u32>,
-    /// Minimum total span (scans) of a kept feature.
+    /// Minimum number of occupied scans in a kept feature (bridged gaps not counted).
     #[arg(long)]
     min_feature_length: Option<usize>,
     /// Max empty scans tolerated inside a feature.
@@ -69,7 +69,7 @@ struct Cli {
     /// MS/MS filter: column half-width in TOF indices.
     #[arg(long)]
     msms_mz_half_width: Option<u32>,
-    /// MS/MS filter: minimum vertical-run span (scans).
+    /// MS/MS filter: minimum number of occupied scans in a kept run.
     #[arg(long)]
     msms_min_feature_length: Option<usize>,
     /// MS/MS filter: max empty scans tolerated inside a feature.
@@ -167,6 +167,19 @@ struct Cli {
     #[arg(long)]
     dia_ms1_im_pad: Option<f64>,
 
+    /// Drop MS1 points outside the run's ddaPASEF/PASEF selection polygon (the IMS
+    /// PolygonFilter stored in analysis.tdf) — signal in never-selected precursor
+    /// space. Auto-detected: no-op when the run stores no polygon.
+    #[arg(long)]
+    ms1_polygon: bool,
+    /// MS1 polygon gate: m/z leniency added to each side, in Da (keeps an edge
+    /// precursor's isotopic envelope).
+    #[arg(long)]
+    ms1_polygon_mz_pad: Option<f64>,
+    /// MS1 polygon gate: ion-mobility leniency added to each side, in 1/K0.
+    #[arg(long)]
+    ms1_polygon_im_pad: Option<f64>,
+
     /// Filter MS/MS frames too. By default only MS1 frames are filtered (the
     /// vertical-IM filter is MS1-specific and strips most MS/MS fragment signal).
     #[arg(long)]
@@ -222,6 +235,9 @@ struct FileConfig {
     dia_ms1_window: Option<bool>,
     dia_ms1_mz_pad: Option<f64>,
     dia_ms1_im_pad: Option<f64>,
+    ms1_polygon: Option<bool>,
+    ms1_polygon_mz_pad: Option<f64>,
+    ms1_polygon_im_pad: Option<f64>,
     all_frames: Option<bool>,
     threads: Option<usize>,
 }
@@ -234,6 +250,14 @@ impl FileConfig {
     }
 }
 
+/// Resolve one knob with explicit CLI flag > config-file value > built-in default
+/// precedence. `$cli` and `$cfg` are `Option`s; `$default` is the fallback value.
+macro_rules! pick {
+    ($cli:expr, $cfg:expr, $default:expr $(,)?) => {
+        $cli.or($cfg).unwrap_or($default)
+    };
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -242,33 +266,31 @@ fn main() -> Result<()> {
         None => FileConfig::default(),
     };
 
-    // Precedence for each knob: explicit CLI flag > config file > built-in default.
-    let defaults = FilterParams::default();
+    // Each knob below resolves via `pick!`: CLI flag > config file > built-in default.
+    let d = FilterParams::default();
     let params = FilterParams {
-        mz_half_width: cli
-            .mz_half_width
-            .or(cfg.mz_half_width)
-            .unwrap_or(defaults.mz_half_width),
-        min_feature_length: cli
-            .min_feature_length
-            .or(cfg.min_feature_length)
-            .unwrap_or(defaults.min_feature_length),
-        max_internal_gap: cli
-            .max_internal_gap
-            .or(cfg.max_internal_gap)
-            .unwrap_or(defaults.max_internal_gap),
-        min_window_intensity: cli
-            .min_window_intensity
-            .or(cfg.min_window_intensity)
-            .unwrap_or(defaults.min_window_intensity),
-        min_feature_intensity: cli
-            .min_feature_intensity
-            .or(cfg.min_feature_intensity)
-            .unwrap_or(defaults.min_feature_intensity),
-        num_iterations: cli
-            .iterations
-            .or(cfg.iterations)
-            .unwrap_or(defaults.num_iterations),
+        mz_half_width: pick!(cli.mz_half_width, cfg.mz_half_width, d.mz_half_width),
+        min_feature_length: pick!(
+            cli.min_feature_length,
+            cfg.min_feature_length,
+            d.min_feature_length
+        ),
+        max_internal_gap: pick!(
+            cli.max_internal_gap,
+            cfg.max_internal_gap,
+            d.max_internal_gap
+        ),
+        min_window_intensity: pick!(
+            cli.min_window_intensity,
+            cfg.min_window_intensity,
+            d.min_window_intensity
+        ),
+        min_feature_intensity: pick!(
+            cli.min_feature_intensity,
+            cfg.min_feature_intensity,
+            d.min_feature_intensity
+        ),
+        num_iterations: pick!(cli.iterations, cfg.iterations, d.num_iterations),
     };
 
     // Pre-filter smoothing radius (decoupled from the filter knobs above): explicit
@@ -282,96 +304,101 @@ fn main() -> Result<()> {
     } else {
         cfg.halo.unwrap_or(true)
     };
-    let hd = HaloParams::default();
+    let d = HaloParams::default();
     let halo = HaloParams {
-        peak_fraction: cli
-            .halo_peak_fraction
-            .or(cfg.halo_peak_fraction)
-            .unwrap_or(hd.peak_fraction),
-        mz_idx_half_width: cli
-            .halo_mz_idx_half_width
-            .or(cfg.halo_mz_idx_half_width)
-            .unwrap_or(hd.mz_idx_half_width),
-        scan_half_width: cli
-            .halo_scan_half_width
-            .or(cfg.halo_scan_half_width)
-            .unwrap_or(hd.scan_half_width),
+        peak_fraction: pick!(
+            cli.halo_peak_fraction,
+            cfg.halo_peak_fraction,
+            d.peak_fraction
+        ),
+        mz_idx_half_width: pick!(
+            cli.halo_mz_idx_half_width,
+            cfg.halo_mz_idx_half_width,
+            d.mz_idx_half_width
+        ),
+        scan_half_width: pick!(
+            cli.halo_scan_half_width,
+            cfg.halo_scan_half_width,
+            d.scan_half_width
+        ),
     };
 
     // MS/MS denoising (ddaPASEF): off unless --denoise-msms or `denoise_msms = true`.
     let msms_enabled = cli.denoise_msms || cfg.denoise_msms.unwrap_or(false);
-    let mdf = MsmsFilterParams::default();
+    let d = MsmsFilterParams::default();
     let msms = MsmsFilterParams {
-        mz_half_width: cli
-            .msms_mz_half_width
-            .or(cfg.msms_mz_half_width)
-            .unwrap_or(mdf.mz_half_width),
-        min_feature_length: cli
-            .msms_min_feature_length
-            .or(cfg.msms_min_feature_length)
-            .unwrap_or(mdf.min_feature_length),
-        max_internal_gap: cli
-            .msms_max_internal_gap
-            .or(cfg.msms_max_internal_gap)
-            .unwrap_or(mdf.max_internal_gap),
-        min_window_intensity: cli
-            .msms_min_window_intensity
-            .or(cfg.msms_min_window_intensity)
-            .unwrap_or(mdf.min_window_intensity),
-        min_feature_intensity: cli
-            .msms_min_feature_intensity
-            .or(cfg.msms_min_feature_intensity)
-            .unwrap_or(mdf.min_feature_intensity),
-        num_iterations: cli
-            .msms_iterations
-            .or(cfg.msms_iterations)
-            .unwrap_or(mdf.num_iterations),
+        mz_half_width: pick!(
+            cli.msms_mz_half_width,
+            cfg.msms_mz_half_width,
+            d.mz_half_width
+        ),
+        min_feature_length: pick!(
+            cli.msms_min_feature_length,
+            cfg.msms_min_feature_length,
+            d.min_feature_length
+        ),
+        max_internal_gap: pick!(
+            cli.msms_max_internal_gap,
+            cfg.msms_max_internal_gap,
+            d.max_internal_gap
+        ),
+        min_window_intensity: pick!(
+            cli.msms_min_window_intensity,
+            cfg.msms_min_window_intensity,
+            d.min_window_intensity
+        ),
+        min_feature_intensity: pick!(
+            cli.msms_min_feature_intensity,
+            cfg.msms_min_feature_intensity,
+            d.min_feature_intensity
+        ),
+        num_iterations: pick!(cli.msms_iterations, cfg.msms_iterations, d.num_iterations),
     };
 
     // Box-averaging smoother (post-halo, pre-watershed): off unless --smooth or
     // `smooth = true`. CLI > config > default for its knobs.
     let smooth_enabled = cli.smooth || cfg.smooth.unwrap_or(false);
-    let sd = SmoothParams::default();
+    let d = SmoothParams::default();
     let smooth = SmoothParams {
-        mz_idx_half_width: cli
-            .smooth_mz_idx_half_width
-            .or(cfg.smooth_mz_idx_half_width)
-            .unwrap_or(sd.mz_idx_half_width),
-        scan_half_width: cli
-            .smooth_scan_half_width
-            .or(cfg.smooth_scan_half_width)
-            .unwrap_or(sd.scan_half_width),
-        iterations: cli
-            .smooth_iterations
-            .or(cfg.smooth_iterations)
-            .unwrap_or(sd.iterations),
+        mz_idx_half_width: pick!(
+            cli.smooth_mz_idx_half_width,
+            cfg.smooth_mz_idx_half_width,
+            d.mz_idx_half_width
+        ),
+        scan_half_width: pick!(
+            cli.smooth_scan_half_width,
+            cfg.smooth_scan_half_width,
+            d.scan_half_width
+        ),
+        iterations: pick!(cli.smooth_iterations, cfg.smooth_iterations, d.iterations),
     };
 
     // Watershed centroider (final stage): off unless --watershed or `watershed =
     // true`. Its knobs follow the same CLI > config > default precedence.
     let watershed_enabled = cli.watershed || cfg.watershed.unwrap_or(false);
-    let wd = WatershedParams::default();
+    let d = WatershedParams::default();
     let watershed = WatershedParams {
-        box_scan: cli
-            .watershed_box_scan
-            .or(cfg.watershed_box_scan)
-            .unwrap_or(wd.box_scan),
-        box_mz_idx: cli
-            .watershed_box_mz_idx
-            .or(cfg.watershed_box_mz_idx)
-            .unwrap_or(wd.box_mz_idx),
-        min_seed_intensity: cli
-            .watershed_min_seed_intensity
-            .or(cfg.watershed_min_seed_intensity)
-            .unwrap_or(wd.min_seed_intensity),
-        min_centroid_total: cli
-            .watershed_min_centroid_total
-            .or(cfg.watershed_min_centroid_total)
-            .unwrap_or(wd.min_centroid_total),
-        max_tof_offset: cli
-            .watershed_max_tof_offset
-            .or(cfg.watershed_max_tof_offset)
-            .unwrap_or(wd.max_tof_offset),
+        box_scan: pick!(cli.watershed_box_scan, cfg.watershed_box_scan, d.box_scan),
+        box_mz_idx: pick!(
+            cli.watershed_box_mz_idx,
+            cfg.watershed_box_mz_idx,
+            d.box_mz_idx
+        ),
+        min_seed_intensity: pick!(
+            cli.watershed_min_seed_intensity,
+            cfg.watershed_min_seed_intensity,
+            d.min_seed_intensity
+        ),
+        min_centroid_total: pick!(
+            cli.watershed_min_centroid_total,
+            cfg.watershed_min_centroid_total,
+            d.min_centroid_total
+        ),
+        max_tof_offset: pick!(
+            cli.watershed_max_tof_offset,
+            cfg.watershed_max_tof_offset,
+            d.max_tof_offset
+        ),
     };
 
     // Greedy small-box centroider (alternative final stage): off unless
@@ -382,32 +409,32 @@ fn main() -> Result<()> {
             "--box-centroid and --watershed are mutually exclusive (both are terminal centroiders)"
         );
     }
-    let bcd = BoxCentroidParams::default();
+    let d = BoxCentroidParams::default();
     let box_centroid = BoxCentroidParams {
-        mz_idx_half_width: cli
-            .box_centroid_mz_idx_half
-            .or(cfg.box_centroid_mz_idx_half)
-            .unwrap_or(bcd.mz_idx_half_width),
-        scan_half_width: cli
-            .box_centroid_scan_half
-            .or(cfg.box_centroid_scan_half)
-            .unwrap_or(bcd.scan_half_width),
-        min_centroid_total: cli
-            .box_centroid_min_total
-            .or(cfg.box_centroid_min_total)
-            .unwrap_or(bcd.min_centroid_total),
+        mz_idx_half_width: pick!(
+            cli.box_centroid_mz_idx_half,
+            cfg.box_centroid_mz_idx_half,
+            d.mz_idx_half_width
+        ),
+        scan_half_width: pick!(
+            cli.box_centroid_scan_half,
+            cfg.box_centroid_scan_half,
+            d.scan_half_width
+        ),
+        min_centroid_total: pick!(
+            cli.box_centroid_min_total,
+            cfg.box_centroid_min_total,
+            d.min_centroid_total
+        ),
     };
 
     // diaPASEF isolation-window features (both off by default, diaPASEF-only).
     // `dia_window` gates out-of-window MS/MS points; `dia_per_window` makes the
     // MS/MS filter run window-by-window. Both share the DiaFrameMsMs* tables.
     let dia_window_enabled = cli.dia_window || cfg.dia_window.unwrap_or(false);
-    let ddw = DiaWindowParams::default();
+    let d = DiaWindowParams::default();
     let dia_window = DiaWindowParams {
-        scan_pad: cli
-            .dia_window_scan_pad
-            .or(cfg.dia_window_scan_pad)
-            .unwrap_or(ddw.scan_pad),
+        scan_pad: pick!(cli.dia_window_scan_pad, cfg.dia_window_scan_pad, d.scan_pad),
     };
     let dia_per_window = cli.dia_per_window || cfg.dia_per_window.unwrap_or(false);
 
@@ -415,16 +442,20 @@ fn main() -> Result<()> {
     // points outside every isolation window's (m/z, mobility) region, padded in
     // physical units. CLI > config > default for the pads.
     let dia_ms1_enabled = cli.dia_ms1_window || cfg.dia_ms1_window.unwrap_or(false);
-    let dm1d = DiaMs1WindowParams::default();
+    let d = DiaMs1WindowParams::default();
     let dia_ms1 = DiaMs1WindowParams {
-        mz_pad: cli
-            .dia_ms1_mz_pad
-            .or(cfg.dia_ms1_mz_pad)
-            .unwrap_or(dm1d.mz_pad),
-        im_pad: cli
-            .dia_ms1_im_pad
-            .or(cfg.dia_ms1_im_pad)
-            .unwrap_or(dm1d.im_pad),
+        mz_pad: pick!(cli.dia_ms1_mz_pad, cfg.dia_ms1_mz_pad, d.mz_pad),
+        im_pad: pick!(cli.dia_ms1_im_pad, cfg.dia_ms1_im_pad, d.im_pad),
+    };
+
+    // MS1 selection-polygon gate (off by default): drop MS1 points outside the
+    // run's IMS PolygonFilter. CLI > config > default for the pads. Auto-detects
+    // polygon presence (no-op otherwise).
+    let ms1_polygon_enabled = cli.ms1_polygon || cfg.ms1_polygon.unwrap_or(false);
+    let d = Ms1PolygonParams::default();
+    let ms1_polygon = Ms1PolygonParams {
+        mz_pad: pick!(cli.ms1_polygon_mz_pad, cfg.ms1_polygon_mz_pad, d.mz_pad),
+        im_pad: pick!(cli.ms1_polygon_im_pad, cfg.ms1_polygon_im_pad, d.im_pad),
     };
 
     // Boolean/operational flags: the CLI flag can only turn `all_frames` on; when
@@ -439,28 +470,27 @@ fn main() -> Result<()> {
             .ok();
     }
 
+    let stages = Stages {
+        filter_all_frames: all_frames,
+        frame_half_width,
+        halo: halo_enabled.then_some(&halo),
+        denoise_msms: msms_enabled.then_some(&msms),
+        smooth: smooth_enabled.then_some(&smooth),
+        watershed: watershed_enabled.then_some(&watershed),
+        box_centroid: box_centroid_enabled.then_some(&box_centroid),
+        dia_window: dia_window_enabled.then_some(&dia_window),
+        dia_per_window,
+        dia_ms1: dia_ms1_enabled.then_some(&dia_ms1),
+        ms1_polygon: ms1_polygon_enabled.then_some(&ms1_polygon),
+    };
+
     let pb = ProgressBar::new(0);
     pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} frames").unwrap());
-    let stats = dnoise::denoise_with_progress(
-        &cli.input,
-        &cli.output,
-        &params,
-        all_frames,
-        frame_half_width,
-        halo_enabled.then_some(&halo),
-        msms_enabled.then_some(&msms),
-        smooth_enabled.then_some(&smooth),
-        watershed_enabled.then_some(&watershed),
-        box_centroid_enabled.then_some(&box_centroid),
-        dia_window_enabled.then_some(&dia_window),
-        dia_per_window,
-        dia_ms1_enabled.then_some(&dia_ms1),
-        cli.force,
-        |p| {
+    let stats =
+        dnoise::denoise_with_progress(&cli.input, &cli.output, &params, &stages, cli.force, |p| {
             pb.set_length(p.frames_total as u64);
             pb.set_position(p.frames_done as u64);
-        },
-    )?;
+        })?;
     pb.finish_and_clear();
     let pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64

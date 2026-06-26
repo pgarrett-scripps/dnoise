@@ -99,6 +99,21 @@ dia_ms1_mz_pad = 5.0
 # Ion-mobility leniency added to each side of every window, in 1/K0.
 dia_ms1_im_pad = 0.05
 
+# --- MS1 selection-polygon gate (ddaPASEF/PASEF; off by default) ---
+# Drop MS1 points outside the run's instrument selection polygon (the IMS
+# PolygonFilter stored in analysis.tdf): the (m/z, 1/K0) region the method
+# restricts precursor selection to. Signal outside it is never a precursor
+# (background, singly-charged hump, out-of-range ions), so it is MS1 noise. The
+# polygon comes from the data and is converted to (scan, TOF index) once via the
+# run calibration. Auto-detected: no-op when the run stores no polygon. Enable
+# with ms1_polygon = true (--ms1-polygon).
+ms1_polygon = false
+# m/z leniency added to each side of the polygon, in Daltons (keeps an edge
+# precursor's isotopic envelope). 0 = literal polygon.
+ms1_polygon_mz_pad = 0.0
+# Ion-mobility leniency added to each side, in 1/K0. 0 = literal polygon.
+ms1_polygon_im_pad = 0.0
+
 # --- Experimental pre-filter smoothing ---
 # Replace each MS1 frame with the centered running average of its 2r+1
 # MS1-frame neighborhood before filtering. 0 = off.

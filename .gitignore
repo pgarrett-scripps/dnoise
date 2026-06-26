@@ -10,3 +10,7 @@
 # Python caches
 __pycache__/
 *.pyc
+
+# scratch and run logs
+/tmp/
+/benchmark/logs/

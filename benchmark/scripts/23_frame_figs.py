@@ -27,6 +27,16 @@ import pandas as pd
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Rectangle
 
+# Keep all lettering >= 4.5 pt after the figure is downscaled to the text width.
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "figure.titlesize": 15,
+})
+
 ROOT = Path(__file__).resolve().parents[1]
 FIGS = ROOT.parent / "paper" / "figures"
 DUMP = ROOT.parent / "target" / "release" / "examples" / "dump_frame"
@@ -63,7 +73,10 @@ def frame_fig(cols: list[tuple[str, Path]], out: Path, title: str) -> None:
     k0_e = np.linspace(raw["one_over_k0"].min(), raw["one_over_k0"].max(), 300)
 
     n = len(cols)
-    fig, ax = plt.subplots(2, n, figsize=(4.6 * n, 8.4))
+    # Extra hspace so the top row's "m/z" xlabel does not collide with the
+    # bottom row's titles.
+    fig, ax = plt.subplots(2, n, figsize=(4.6 * n, 9.2),
+                           gridspec_kw={"hspace": 0.45})
     im = sc = None
     for j, (lab, df) in enumerate(frames):
         im = ax[0, j].hist2d(df["mz"], df["one_over_k0"], bins=[mz_e, k0_e],
@@ -77,7 +90,7 @@ def frame_fig(cols: list[tuple[str, Path]], out: Path, title: str) -> None:
         sc = ax[1, j].scatter(sub["mz"], sub["one_over_k0"], c=sub["intensity"],
                               norm=norm, cmap=CMAP, s=9, edgecolors="none")
         ax[1, j].set_xlim(mz0 - MZ_HALF, mz0 + MZ_HALF); ax[1, j].set_ylim(k0 - K0_HALF, k0 + K0_HALF)
-        ax[1, j].set_title(f"{lab} — zoom ({len(sub):,} pts)")
+        ax[1, j].set_title(f"{lab}, zoom ({len(sub):,} pts)")
         ax[1, j].set_xlabel("m/z"); ax[1, j].set_ylabel("ion mobility (1/K0)")
     fig.colorbar(im, ax=ax[0, :].tolist(), label="summed intensity", shrink=0.8)
     fig.colorbar(sc, ax=ax[1, :].tolist(), label="intensity", shrink=0.8)
@@ -105,6 +118,14 @@ def main() -> int:
          ("box", DATA / "box" / F)],
         FIGS / "fig5_frames.png",
         "MS1 frame after the two centroiders (watershed collapses; box tiles)",
+    )
+    frame_fig(
+        [("raw", DATA / "raw" / F),
+         ("streak filter", DATA / "denoised" / F),
+         ("intensity threshold", DATA / "denoised_intensity" / F)],
+        FIGS / "si_intensity_frame.png",
+        "MS1 frame: streak filter vs. a matched strict intensity threshold "
+        "(equal MS1-point removal)",
     )
     return 0
 

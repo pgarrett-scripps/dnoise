@@ -2,7 +2,7 @@
 #
 # Everything is namespaced by DATASET (default dda_5min). Override per invocation:
 #   just dataset=dda_15min all
-#   DATASET=dda_15min just run-all
+#   DATASET=dda_15min just run-compute
 # Known datasets: dda_5min, dda_15min, dia_5min, dia_15min (see 01_list_files.py).
 
 dataset := env_var_or_default("DATASET", "dda_5min")
@@ -57,58 +57,73 @@ datasize:
 compare:
   uv run scripts/10_compare.py
 
-# Paper Fig 2: merged compression figure across gradients -> results/compare/compression.png
-compression-figure:
-  uv run scripts/14_compression_figure.py
-
-# Paper Fig 4: identifications across gradients -> results/compare/id_counts.png
-id-figure:
-  uv run scripts/15_id_figure.py
-
-# Paper Fig 5: LFQ accuracy across gradients -> results/compare/lfq_accuracy.png
-lfq-figure:
-  uv run scripts/16_lfq_accuracy_figure.py
+# Main-text result figures from the computed dda_5min / dia arms:
+#   22 -> fig3_dda, fig4_dia, fig5_centroiders; 26 -> fig_intensity (streak vs threshold)
+paper-figures:
+  uv run scripts/22_paper_figures.py
+  uv run scripts/26_intensity_main_figure.py
 
 # Supporting Information assets: tables (-> paper/si/) + SI figures (-> paper/figures/)
 si-assets:
   #!/usr/bin/env bash
   set -euo pipefail
   cargo build --release --example dump_frame --manifest-path ../Cargo.toml
-  # DIA per-run reduction CSV (needed for the DIA compression table)
-  DATASET=dia_5min uv run scripts/07_data_reduction.py >/dev/null
-  # SI tables (per-run dda 5/15 + dia 5, full accuracy) + config copy
-  uv run scripts/17_si_tables.py dda_5min dda_15min dia_5min
+  # DIA per-run reduction (CSV for the DIA compression table + per-run figure)
+  DATASET=dia_5min  uv run scripts/07_data_reduction.py >/dev/null
+  DATASET=dia_15min uv run scripts/07_data_reduction.py >/dev/null
+  # SI tables: per-run (dda+dia, both gradients) + parallel DDA/DIA accuracy + config
+  uv run scripts/17_si_tables.py dda_5min dda_15min dia_5min dia_15min
+  # SI: per-cell original-vs-MS1 accuracy difference with paired bootstrap CIs
+  uv run scripts/27_accuracy_diff.py dda_5min dda_15min
+  # SI: per-run paired stats (protein/precursor/pg counts, original vs MS1)
+  uv run scripts/28_perrun_stats.py
+  # SI: peptide-rule sensitivity (prints numbers for tab:peptide-rule, hand-entered)
+  uv run scripts/29_peptide_rule_sensitivity.py
   # MS/MS before/after frames (DDA + DIA)
   uv run scripts/18_msms_frame_figure.py dda_5min
   uv run scripts/18_msms_frame_figure.py dia_5min
   cp results/dda_5min/analysis/msms_beforeafter.png ../paper/figures/si_msms_dda.png
   cp results/dia_5min/analysis/msms_beforeafter.png ../paper/figures/si_msms_dia.png
-  # per-gradient SI figures (per-file reduction, violins, CV)
+  # per-gradient SI figures: per-file reduction, ratio violins, CV (DDA + DIA)
   for g in 5min 15min; do
-    cp results/dda_$g/analysis/data_reduction.png   ../paper/figures/si_perfile_$g.png
+    cp results/dda_$g/analysis/data_reduction.png    ../paper/figures/si_perfile_$g.png
+    cp results/dia_$g/analysis/data_reduction.png    ../paper/figures/si_perfile_dia_$g.png
     cp results/dda_$g/analysis/lfq_ratio_violins.png ../paper/figures/si_violins_$g.png
+    cp results/dia_$g/analysis/lfq_ratio_violins.png ../paper/figures/si_violins_dia_$g.png
     cp results/dda_$g/analysis/lfq_cv.png            ../paper/figures/si_cv_$g.png
+    cp results/dia_$g/analysis/lfq_cv.png            ../paper/figures/si_cv_dia_$g.png
   done
   echo "SI assets refreshed; compile with: cd ../paper && typst compile supplementary.typ"
 
-# Paper figures 1/2 (before/after) from the most intense MS1 frame
-frame-figures:
+# Frame point-cloud figures (Fig 2 two-stage filter, Fig 5 centroider frames, and
+# the SI intensity-threshold comparison). Needs the dump_frame example.
+frame-figs:
   cargo build --release --example dump_frame --manifest-path ../Cargo.toml
-  uv run scripts/08_frame_figures.py
+  uv run scripts/23_frame_figs.py
 
 # Paper figure: compression vs min_feature_length on a single file
 sweep:
   uv run scripts/09_compression_sweep.py
 
-# Watershed arm (Fig 6): denoise with the centroider, then Sage on that arm only
+# Watershed centroider arm for Fig 5: denoise with the watershed centroider, then
+# Sage on that arm. (The box arm is built by `just box-arm`.)
 watershed:
   DENOISE_ARMS=wshed bash scripts/04_denoise.sh
   bash scripts/05_search.sh
 
-# Paper figure 6: watershed centroider (frame point clouds + compression / quant / LFQ)
-fig6:
-  cargo build --release --example dump_frame --manifest-path ../Cargo.toml
-  uv run scripts/13_watershed_figure.py
+# Box centroider arm for Fig 5: dnoise --box-centroid on all 18 dda_5min runs, then
+# Sage. Consumed by `just paper-figures` and `just frame-figs`.
+box-arm:
+  cargo build --release --manifest-path ../Cargo.toml
+  bash scripts/21_box_arm.sh
+
+# Intensity-threshold control arm: a strict per-point intensity threshold (T tuned
+# to match the streak filter's MS1 removal) -> Sage -> analyze. Shows the streak
+# prior beats a naive brightness cut at equal data reduction. Config: dnoise.intensity.toml.
+intensity:
+  DENOISE_ARMS=intensity bash scripts/04_denoise.sh
+  bash scripts/05_search.sh
+  uv run scripts/06_analyze.py
 
 # Everything for one dataset, in order
 all: list fasta download unzip denoise search analyze datasize

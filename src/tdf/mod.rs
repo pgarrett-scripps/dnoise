@@ -231,6 +231,69 @@ pub fn read_dia_ms1_boxes(tdf_path: &Path) -> Result<Vec<DiaMs1Box>> {
         .collect())
 }
 
+/// Read the ddaPASEF/PASEF MS1 selection polygon (the "IMS PolygonFilter") as
+/// parallel `(m/z, 1/K0)` vertex arrays. Bruker stores the two arrays as
+/// little-endian `f64` BLOBs in `GroupProperties`, keyed by the
+/// `IMS_PolygonFilter_Mass` / `IMS_PolygonFilter_Mobility` property definitions
+/// (resolved by permanent name, as the numeric IDs are not guaranteed stable).
+///
+/// Returns `None` when the run carries no usable polygon (property absent, no
+/// stored value, fewer than 3 vertices, or mismatched array lengths), which the
+/// caller treats as "no MS1 polygon gate".
+pub fn read_selection_polygon(tdf_path: &Path) -> Result<Option<(Vec<f64>, Vec<f64>)>> {
+    let conn = Connection::open(tdf_path)?;
+    let has_tables: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PropertyDefinitions'",
+            [],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !has_tables {
+        return Ok(None);
+    }
+
+    let prop_id = |name: &str| -> Result<Option<i64>> {
+        Ok(conn
+            .query_row(
+                "SELECT Id FROM PropertyDefinitions WHERE PermanentName=?1",
+                [name],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?)
+    };
+    let (Some(mz_id), Some(im_id)) = (
+        prop_id("IMS_PolygonFilter_Mass")?,
+        prop_id("IMS_PolygonFilter_Mobility")?,
+    ) else {
+        return Ok(None);
+    };
+
+    // One polygon per run: take the first group that stores each array.
+    let read_blob = |prop: i64| -> Result<Option<Vec<f64>>> {
+        let blob: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT Value FROM GroupProperties WHERE Property=?1 LIMIT 1",
+                [prop],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        Ok(blob.map(|b| {
+            b.chunks_exact(8)
+                .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        }))
+    };
+    let (Some(mz), Some(im)) = (read_blob(mz_id)?, read_blob(im_id)?) else {
+        return Ok(None);
+    };
+    if mz.len() < 3 || mz.len() != im.len() {
+        return Ok(None);
+    }
+    Ok(Some((mz, im)))
+}
+
 /// Read `(Id, NumScans, NumPeaks, MsMsType)` for every frame, ordered by `Id`.
 pub fn read_frame_meta(tdf_path: &Path) -> Result<Vec<FrameMeta>> {
     let conn = Connection::open(tdf_path)?;

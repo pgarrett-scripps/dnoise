@@ -25,6 +25,17 @@ import pandas as pd
 
 from _metrics import stats
 
+# Keep all lettering >= 4.5 pt once the figure is downscaled to the text width.
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 11,
+    "figure.titlesize": 15,
+})
+
 ROOT = Path(__file__).resolve().parents[1]
 DATASET = os.environ.get("DATASET", "dda_5min")
 DATA = ROOT / "data" / DATASET
@@ -35,7 +46,15 @@ ARMS = {
     "MS1+MS/MS": DATA / "denoised_msms",
 }
 OUT = ROOT / "results" / DATASET / "analysis"
-COLOR = {"raw": "#1f77b4", "MS1": "#d62728", "MS1+MS/MS": "#2ca02c"}
+# Colorblind-safe (Wong, Nat. Methods 2011); avoids the red/green pairing.
+COLOR = {"raw": "#0072B2", "MS1": "#E69F00", "MS1+MS/MS": "#009E73"}
+
+
+def dataset_label(ds: str) -> str:
+    """e.g. 'dia_5min' -> 'diaPASEF, 5-minute gradient'."""
+    mode, _, grad = ds.partition("_")
+    acq = "diaPASEF" if mode == "dia" else "ddaPASEF"
+    return f"{acq}, {grad.replace('min', '-minute')} gradient"
 
 
 def short_name(fname: str) -> str:
@@ -73,7 +92,7 @@ def main() -> int:
     } for a in arms}
     raw_b = agg["raw"]["bytes"]
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.0))
 
     # Panel A: per-file frame-binary size, three bars per file.
     ax = axes[0]
@@ -82,7 +101,7 @@ def main() -> int:
     for i, a in enumerate(arms):
         ax.bar(x + (i - 1) * w, df[f"bytes_{a}"] / 1e6, w, label=a, color=COLOR[a])
     ax.set_xticks(x)
-    ax.set_xticklabels(df["file"], rotation=90, fontsize=7)
+    ax.set_xticklabels(df["file"], rotation=90, fontsize=10)
     ax.set_ylabel("analysis.tdf_bin (MB)")
     pct = {a: 100 * (1 - agg[a]["bytes"] / raw_b) for a in arms}
     ax.set_title(f"Frame binary size per run\n(overall −{pct['MS1']:.0f}% MS1, −{pct['MS1+MS/MS']:.0f}% MS1+MS/MS)")
@@ -93,12 +112,12 @@ def main() -> int:
     xb = np.arange(len(arms))
     ms1 = [agg[a]["ms1"] / 1e9 for a in arms]
     ms2 = [agg[a]["ms2"] / 1e9 for a in arms]
-    ax.bar(xb, ms1, 0.6, label="MS1 peaks", color="#4c72b0")
-    ax.bar(xb, ms2, 0.6, bottom=ms1, label="MS/MS peaks", color="#dd8452")
+    ax.bar(xb, ms1, 0.6, label="MS1 peaks", color="#0072B2")
+    ax.bar(xb, ms2, 0.6, bottom=ms1, label="MS/MS peaks", color="#E69F00")
     for j, a in enumerate(arms):
         tot = ms1[j] + ms2[j]
         ax.text(j, tot + 0.08, f"{tot:.2f}B\n(−{100*(1-tot/((agg['raw']['ms1']+agg['raw']['ms2'])/1e9)):.0f}%)",
-                ha="center", va="bottom", fontsize=8)
+                ha="center", va="bottom", fontsize=11)
     ax.set_xticks(xb)
     ax.set_xticklabels(arms)
     ax.set_ylabel("peaks (billions)")
@@ -106,7 +125,8 @@ def main() -> int:
     ax.set_title("Peaks by level (MS1 denoising cuts MS1; MS/MS denoising cuts MS/MS)")
     ax.legend()
 
-    fig.suptitle(f"dnoise data-volume reduction ({len(df)} runs, default settings)")
+    fig.suptitle(f"dnoise data-volume reduction, {dataset_label(DATASET)} "
+                 f"({len(df)} runs, default settings)")
     fig.tight_layout()
     fig.savefig(OUT / "data_reduction.png", dpi=150, bbox_inches="tight")
     plt.close(fig)

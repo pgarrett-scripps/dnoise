@@ -1,3 +1,5 @@
+//! Dev/maintainer tool, not a usage example for the library API.
+//!
 //! Compare the zstd frame header Bruker writes vs what our two encode options write.
 //! Usage: cargo run --release --example zstd_probe -- <PATH.d>
 

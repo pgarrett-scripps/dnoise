@@ -2,7 +2,7 @@
 """Shared ID/LFQ/compression metric helpers for the benchmark analysis scripts.
 
 Imported by 06_analyze.py (3-arm comparison), 07_data_reduction.py (compression),
-and 13_watershed_figure.py (Figure 6). Every metric function takes an explicit
+and 22_paper_figures.py (main-text figures). Every metric function takes an explicit
 arm results directory (`.../results/<dataset>/<arm>`) or a `.d` path, so callers
 control which arms they read — there is no module-level dataset state here.
 
@@ -30,6 +30,9 @@ COND_FRAC = {
 PAIRS = [("A", "B"), ("A", "C"), ("B", "C")]
 SPECIES_COLOR = {"HUMAN": "#444444", "YEAST": "#1f77b4", "ECOLI": "#d62728"}
 FDR = 0.01
+# Two-peptide rule for quant reporting: a protein is quantified only if supported
+# by at least this many distinct quantified peptide sequences. Set to 1 to disable.
+MIN_PEPTIDES_PER_PROTEIN = 2
 
 
 def species_of(proteins: str) -> str | None:
@@ -91,9 +94,14 @@ def norm_factors(df: pd.DataFrame, fcols: list[str]) -> dict[str, float]:
     return {c: (target / t if t and t > 0 else 1.0) for c, t in totals.items()}
 
 
-def _rollup(arm_dir: Path) -> tuple[pd.DataFrame | None, list[str]]:
-    """Read an arm's lfq.tsv, total-intensity-normalize, keep species-clean
-    peptides, and roll up to per-(protein, species) intensities per file."""
+def _peptides(arm_dir: Path) -> tuple[pd.DataFrame | None, list[str]]:
+    """Filtered peptide-level LFQ table for an arm: rows passing the LFQ q-value
+    filter, restricted to species-clean peptides, with a `protein` column (first
+    listed protein) and total-intensity-normalized per-file intensities. Proteins
+    are restricted to those supported by >= `MIN_PEPTIDES_PER_PROTEIN` distinct
+    peptide sequences (the two-peptide rule for quant reporting). Returns
+    (peptide-level df with columns [protein, species, peptide] + file columns,
+    file columns) or (None, [])."""
     df = pd.read_csv(arm_dir / "lfq.tsv", sep="\t")
     if "q_value" in df.columns:
         df = df[df["q_value"] <= FDR]
@@ -102,22 +110,56 @@ def _rollup(arm_dir: Path) -> tuple[pd.DataFrame | None, list[str]]:
         return None, []
     factors = norm_factors(df, fcols)
     df = df.assign(species=df["proteins"].map(species_of))
-    df = df[df["species"].notna()]
-    df = df.assign(protein=df["proteins"].map(lambda p: str(p).split(";")[0]))
+    df = df[df["species"].notna()].copy()
+    df["protein"] = df["proteins"].map(lambda p: str(p).split(";")[0])
+    if MIN_PEPTIDES_PER_PROTEIN > 1:
+        npep = df.groupby("protein")["peptide"].transform("nunique")
+        df = df[npep >= MIN_PEPTIDES_PER_PROTEIN]
     vals = df[fcols].replace(0, np.nan).mul(pd.Series(factors), axis=1)
-    df = pd.concat([df[["protein", "species"]], vals], axis=1)
+    return pd.concat([df[["protein", "species", "peptide"]], vals], axis=1), fcols
+
+
+def _rollup(arm_dir: Path) -> tuple[pd.DataFrame | None, list[str]]:
+    """Roll the filtered peptide-level table (see `_peptides`, which applies the
+    two-peptide rule) up to per-(protein, species) intensities per file."""
+    df, fcols = _peptides(arm_dir)
+    if df is None:
+        return None, []
     prot = df.groupby(["protein", "species"], as_index=False)[fcols].sum(min_count=1)
     return prot, fcols
+
+
+def quant_peptide_count(arm_dir: Path, prot: pd.DataFrame | None) -> int:
+    """Number of distinct quantified peptide sequences mapping to the quantified
+    proteins in `prot` (the protein set reported by `lfq_table` for this arm)."""
+    if prot is None or prot.empty:
+        return 0
+    peps, _ = _peptides(arm_dir)
+    if peps is None:
+        return 0
+    return int(peps[peps["protein"].isin(set(prot["protein"]))]["peptide"].nunique())
 
 
 def expected_log2(a: str, b: str, sp: str) -> float:
     return float(np.log2(COND_FRAC[a][sp] / COND_FRAC[b][sp]))
 
 
+def median_ci(values, n_boot: int = 2000, seed: int = 0) -> tuple[float, float]:
+    """Percentile bootstrap 95% confidence interval for the median of `values`.
+    Seeded so the interval is reproducible."""
+    v = np.asarray(values, float)
+    if len(v) == 0:
+        return (np.nan, np.nan)
+    rng = np.random.default_rng(seed)
+    meds = np.median(rng.choice(v, size=(n_boot, len(v)), replace=True), axis=1)
+    return float(np.percentile(meds, 2.5)), float(np.percentile(meds, 97.5))
+
+
 def pair_accuracy(arm: str, arm_dir: Path) -> list[dict]:
     """Observed median log2 ratio per (pair, species) for A/B, A/C, B/C, vs the
-    SDRF-derived expected ratios. A protein contributes to a pair if quantified
-    in >=2/3 replicates of both that pair's conditions. `arm` labels the rows."""
+    SDRF-derived expected ratios, with a bootstrap 95% CI for each median. A protein
+    contributes to a pair if quantified in >=2/3 replicates of both that pair's
+    conditions. `arm` labels the rows."""
     prot, fcols = _rollup(arm_dir)
     if prot is None:
         return []
@@ -136,10 +178,12 @@ def pair_accuracy(arm: str, arm_dir: Path) -> list[dict]:
             sub = ratio[prot["species"] == sp].dropna()
             if len(sub) == 0:
                 continue
+            lo, hi = median_ci(sub.values)
             out.append({
                 "arm": arm, "pair": f"{a}/{b}", "species": sp,
                 "expected": expected_log2(a, b, sp),
-                "observed": float(sub.median()), "n": len(sub),
+                "observed": float(sub.median()), "ci_lo": lo, "ci_hi": hi,
+                "n": len(sub),
             })
     return out
 
@@ -164,10 +208,12 @@ def lfq_table(arm_dir: Path) -> pd.DataFrame | None:
     return prot
 
 
-def lfq_metrics(prot: pd.DataFrame | None) -> dict:
+def lfq_metrics(prot: pd.DataFrame | None, arm_dir: Path | None = None) -> dict:
     if prot is None or prot.empty:
-        return {"n_quantified": 0}
+        return {"n_quantified": 0, "n_quant_peptide": 0}
     m = {"n_quantified": len(prot)}
+    if arm_dir is not None:
+        m["n_quant_peptide"] = quant_peptide_count(arm_dir, prot)
     cv = pd.concat([prot["cv_A"], prot["cv_B"]]).dropna()
     m["median_cv"] = float(cv.median())
     for sp in SPECIES:

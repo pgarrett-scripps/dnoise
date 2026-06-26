@@ -42,6 +42,7 @@ pub mod frame;
 pub mod halo;
 pub mod msms;
 pub mod params;
+pub mod polygon;
 pub mod smooth;
 pub mod watershed;
 pub mod writer;
@@ -53,7 +54,7 @@ mod tdf;
 pub use error::{DecodeError, DnoiseError, Result};
 pub use params::{
     BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
-    MsmsFilterParams, SmoothParams, WatershedParams,
+    Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
 };
 pub use writer::{DenoiseStats, Progress, denoise, denoise_with_progress};
 
@@ -66,5 +67,6 @@ pub use filter::{filter_iterated, filter_once};
 pub use frame::FlatFrame;
 pub use halo::horizontal_halo_keep_mask;
 pub use msms::combine_and_filter;
+pub use polygon::PolygonGate;
 pub use smooth::box_average;
 pub use watershed::watershed_centroid;

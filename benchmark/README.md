@@ -88,13 +88,52 @@ just compare                    # overlay dda_5min vs dda_15min -> results/compa
 Requires `uv`, `sage` on PATH, and the built `dnoise` binary
 (`cargo build --release` in the repo root). `data/` and `results/` are gitignored.
 
+### Reproducing the manuscript figures and tables
+
+After the four datasets are computed (`just dataset=<dda_5min|dda_15min|dia_5min|dia_15min> all`,
+with `just diann` + `just analyze-dia` for the DIA sets), regenerate every paper
+asset from the on-disk results:
+
+```bash
+just dataset=dda_5min intensity   # strict intensity-threshold control arm (Fig 4, S6, S10)
+just dataset=dda_5min watershed   # watershed centroider arm (Fig 5)
+just box-arm                      # box centroider arm (Fig 5)
+just paper-figures                # Figs 3 (DDA), 4 (DIA), 5 (centroiders), intensity comparison
+just frame-figs                   # Fig 2 + centroider/intensity frame point clouds
+just sweep                        # compression sweep (Section S3)
+just compare                      # cross-gradient comparison -> gradient_compare.png
+just si-assets                    # SI tables (si/*.typ) + SI figures (per-run, MS/MS, violins, CV)
+cd ../paper && typst compile paper.typ && typst compile supplementary.typ
+```
+
+**Exact command per manuscript asset** (the on-disk PNG filename does not always
+match the rendered figure number; the table resolves both):
+
+| Manuscript | File | Command (from `benchmark/`) |
+|---|---|---|
+| Fig 1 (overview) | `paper/figures/dnoise_graphical_abstract.png` | manual schematic (not data-generated) |
+| Fig 2 (two-stage filter) | `figures/fig2_frame_stages.png` | `just frame-figs` |
+| Fig 3 (DDA IDs/quant/accuracy) | `figures/fig3_dda.png` | `just paper-figures` (`22_paper_figures.py`) |
+| Fig 4 (intensity-threshold control) | `figures/fig_intensity.png` | `just paper-figures` (`26_intensity_main_figure.py`) |
+| Fig 5 (DIA) | `figures/fig4_dia.png` | `just paper-figures` (`22_paper_figures.py`) |
+| Fig 6 (centroiders) | `figures/fig5_frames.png` + `fig5_centroiders.png` | `just frame-figs` + `just paper-figures` |
+| Table 1 (dataset) | in `paper.typ` | static (mixing ratios) |
+| Table 2 (ID/quant summary) | in `paper.typ` | numbers from `results/<ds>/analysis/summary.csv` (`just analyze` / `analyze-dia`) |
+| Tables S1–S16, SI figures | `paper/si/*.typ`, `figures/si_*.png` | `just si-assets` (`17_si_tables.py`) |
+| Accuracy diff S7 / per-run stats S9 | `paper/si/accuracy_diff.typ`, `perrun_stats.typ` | `27_accuracy_diff.py`, `28_perrun_stats.py` |
+| Tool comparison S15 / peptide-rule S16 | hand-entered in `supplementary.typ` | `29_peptide_rule_sensitivity.py` (S16) |
+| Compression sweep (S3) | `figures/compression_sweep.png` | `just sweep` (`09_compression_sweep.py`) |
+| Param sweep (S7) | `figures/si_param_sweep_*.png` | `30`→`34` (see `scripts/30_param_sweep.py`) |
+| Polygon gate (S9) | `figures/si_polygon_compare.png` | `43_polygon_compare_analyze.py` |
+
 ## Outputs (`results/<dataset>/analysis/`)
 
 - `summary.csv` — the three arms, side by side:
   - IDs @ 1% FDR: PSMs, peptides, protein groups (+ per-species peptide counts)
   - LFQ accuracy: per-species median log2(A/B), **bias** vs expected, MAD spread
   - LFQ precision: median protein CV within condition
-  - completeness: # proteins quantified (≥2/3 reps in both conditions)
+  - completeness: # proteins quantified (two-peptide rule: ≥2 distinct peptides
+    and ≥2 replicates in each compared condition)
 - `accuracy.csv` — observed vs expected median log2 for A/B, A/C, B/C × species
 - `data_reduction.{png,csv}` — frame-binary size + peak counts (MS1/MS2) per arm
 - `lfq_accuracy.png`, `lfq_ratio_violins.png`, `lfq_cv.png`, `id_counts.png`

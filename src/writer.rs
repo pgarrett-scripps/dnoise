@@ -1,7 +1,6 @@
 //! Orchestration: copy the source `.d`, rewrite `analysis.tdf_bin` with filtered
 //! frames (re-encoded as type 2), and fix up the `analysis.tdf` SQLite database.
 
-use crate::average::running_average;
 use crate::box_centroid::box_centroid;
 use crate::codec::encode_frame_type2;
 use crate::dia_ms1::{DiaMs1Gate, TofScanBox};
@@ -12,13 +11,14 @@ use crate::frame::FlatFrame;
 use crate::halo::horizontal_halo_keep_mask;
 use crate::msms::{MsmsKeep, build_msms_keep};
 use crate::params::{
-    BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
-    MsmsFilterParams, SmoothParams, WatershedParams,
+    DiaMs1WindowParams, FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, Stages,
 };
+use crate::polygon::PolygonGate;
 use crate::smooth::box_average;
 use crate::tdf::{self, DiaWindows, FrameUpdate};
 use crate::watershed::watershed_centroid;
 use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
@@ -58,125 +58,47 @@ pub struct Progress {
 
 /// Denoise `input` (.d) into a new `output` (.d).
 ///
-/// `filter_all_frames`: when false (default), only MS1 frames are filtered and
-/// MS/MS frames are re-encoded unchanged — the vertical-IM filter is an MS1
-/// algorithm and strips most MS/MS fragment signal, collapsing DDA IDs. When
-/// true, every frame is filtered.
-///
-/// `frame_half_width`: when > 0, each MS1 frame is replaced by the centered
-/// running average of its `2*frame_half_width+1` MS1-frame neighborhood before
-/// filtering (see [`crate::average`]). MS/MS frames are never averaged. 0 is the
-/// default and reproduces the unsmoothed pipeline exactly.
-///
-/// `halo`: when `Some`, the horizontal-halo filter ([`crate::halo`]) runs after
-/// the vertical filter to remove the weak m/z halo flanking bright peaks.
-/// `None` disables it.
-///
-/// `denoise_msms`: when `Some`, MS/MS frames are denoised with these filter
-/// knobs instead of being passed through (`None` leaves them unchanged). The
-/// acquisition scheme is auto-detected: **ddaPASEF** combines each precursor's
-/// fragment scans across frames before filtering (see [`crate::msms`]);
-/// **diaPASEF** (no `PasefFrameMsMsInfo`) runs the same filter on each whole
-/// MS/MS frame as-is, since each isolation window is sampled once per cycle.
-///
-/// `smooth`: when `Some`, the box-averaging smoother ([`crate::smooth`]) runs on
-/// each filtered frame's survivors — after the halo filter, before `watershed` —
-/// rewriting intensities with their `(scan, TOF index)` box mean to stabilise
-/// watershed seeding. Applied to the same frames as the vertical filter. `None`
-/// (default) disables it.
-///
-/// `watershed`: when `Some`, the watershed centroider ([`crate::watershed`])
-/// runs as a final stage on each filtered frame's survivors, collapsing them
-/// into intensity-weighted centroids. Applied to the same frames the vertical
-/// filter touches (MS1 always; MS/MS only when `filter_all_frames`). `None`
-/// (default) disables it, leaving the filtered points as-is.
-///
-/// `box_centroid_params`: when `Some`, the greedy small-box centroider
-/// ([`crate::box_centroid`]) runs as the final stage instead — consolidating
-/// points within small fixed boxes (tiling streaks rather than collapsing them).
-/// Mutually exclusive with `watershed`. Applied to the same frames. `None`
-/// (default) disables it.
-///
-/// `dia_window`: when `Some` (diaPASEF only), MS/MS points whose mobility scan
-/// falls outside every isolation window for their frame are dropped (the
-/// [`crate::dia_window::in_window_mask`] gate, with the struct's `scan_pad`). Has
-/// no effect on ddaPASEF data (no `DiaFrameMsMs*` tables). `None` disables it.
-///
-/// `dia_per_window`: when `true` (diaPASEF only), the MS/MS vertical/halo filter
-/// is run independently inside each isolation window's scan slice
-/// ([`crate::dia_window::filter_per_window`]) instead of over the whole frame,
-/// preventing the filter from fusing a mobility run across a window boundary
-/// (cross-talk between unrelated isolation events). Applies wherever the MS/MS
-/// filter runs (`denoise_msms` on diaPASEF, or `filter_all_frames`); ignored on
-/// ddaPASEF and when no MS/MS filter runs.
-///
-/// `dia_ms1`: when `Some` (diaPASEF only), **MS1** points that fall outside every
-/// isolation window's `(m/z, mobility)` region are dropped ([`crate::dia_ms1`]).
-/// The windows (`DiaFrameMsMsWindows`) are padded by the struct's `mz_pad` (Da) and
-/// `im_pad` (1/K0) — converted to TOF indices / scans once via the run's
-/// calibration — so a precursor near a window edge keeps its full isotopic
-/// envelope. Has no effect on ddaPASEF data (no `DiaFrameMsMs*` tables). `None`
-/// disables it.
+/// The core vertical-IM filter ([`FilterParams`]) runs on MS1 frames; `stages`
+/// selects every optional stage layered on top (halo, MS/MS denoising, smoothing,
+/// centroiding, the diaPASEF window gates, and the ddaPASEF selection-polygon
+/// gate) — see [`Stages`] for the per-stage semantics. `force` overwrites an
+/// existing `output`.
 ///
 /// This reports no progress; use [`denoise_with_progress`] to receive
 /// [`Progress`] updates as frames are written.
-#[allow(clippy::too_many_arguments)]
 pub fn denoise(
     input: &Path,
     output: &Path,
     params: &FilterParams,
-    filter_all_frames: bool,
-    frame_half_width: usize,
-    halo: Option<&HaloParams>,
-    denoise_msms: Option<&MsmsFilterParams>,
-    smooth: Option<&SmoothParams>,
-    watershed: Option<&WatershedParams>,
-    box_centroid_params: Option<&BoxCentroidParams>,
-    dia_window: Option<&DiaWindowParams>,
-    dia_per_window: bool,
-    dia_ms1: Option<&DiaMs1WindowParams>,
+    stages: &Stages,
     force: bool,
 ) -> Result<DenoiseStats> {
-    denoise_with_progress(
-        input,
-        output,
-        params,
-        filter_all_frames,
-        frame_half_width,
-        halo,
-        denoise_msms,
-        smooth,
-        watershed,
-        box_centroid_params,
-        dia_window,
-        dia_per_window,
-        dia_ms1,
-        force,
-        |_| {},
-    )
+    denoise_with_progress(input, output, params, stages, force, |_| {})
 }
 
 /// Like [`denoise`], but invokes `progress` once before processing and again
 /// after each frame is written, so callers (e.g. a CLI) can drive a progress bar
 /// without the library depending on any UI crate.
-#[allow(clippy::too_many_arguments)]
 pub fn denoise_with_progress<F: FnMut(Progress)>(
     input: &Path,
     output: &Path,
     params: &FilterParams,
-    filter_all_frames: bool,
-    frame_half_width: usize,
-    halo: Option<&HaloParams>,
-    denoise_msms: Option<&MsmsFilterParams>,
-    smooth: Option<&SmoothParams>,
-    watershed: Option<&WatershedParams>,
-    box_centroid_params: Option<&BoxCentroidParams>,
-    dia_window: Option<&DiaWindowParams>,
-    dia_per_window: bool,
-    dia_ms1: Option<&DiaMs1WindowParams>,
+    stages: &Stages,
     force: bool,
     mut progress: F,
 ) -> Result<DenoiseStats> {
+    // Unpack the stages this function builds gates from; the per-frame stages
+    // (smoothing, centroiding, etc.) are forwarded to `process_frame` via `stages`.
+    let &Stages {
+        halo,
+        denoise_msms,
+        dia_window,
+        dia_per_window,
+        dia_ms1,
+        ms1_polygon,
+        ..
+    } = stages;
+
     let in_tdf = input.join("analysis.tdf");
     let in_bin = input.join("analysis.tdf_bin");
     if !in_tdf.is_file() || !in_bin.is_file() {
@@ -253,6 +175,14 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     };
     let dia_ms1_ref = dia_ms1_gate.as_ref();
 
+    // MS1 selection-polygon gate: build the per-scan TOF lookup once from the
+    // run's IMS PolygonFilter + calibration. `None` when the run stores no polygon.
+    let polygon_gate = match ms1_polygon {
+        Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
+        None => None,
+    };
+    let polygon_ref = polygon_gate.as_ref();
+
     let out_bin = output.join("analysis.tdf_bin");
     let mut bin = BufWriter::new(fs::File::create(&out_bin)?);
 
@@ -271,6 +201,19 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         frames_total: n_frames,
     });
 
+    // Per-run context shared by every frame: the prebuilt MS/MS keep sets and
+    // gates derived above, plus the MS1-stream index maps. Bundling these keeps
+    // `process_frame` to a handful of arguments.
+    let ctx = FrameCtx {
+        msms: msms_ref,
+        dia_msms,
+        dia_windows: dia_windows_ref,
+        dia_ms1: dia_ms1_ref,
+        polygon: polygon_ref,
+        ms1_indices: &ms1_indices,
+        ms1_pos: &ms1_pos,
+    };
+
     let mut offset: u64 = header_len;
     let mut updates: Vec<FrameUpdate> = Vec::with_capacity(n_frames);
     let mut raw_points: u64 = 0;
@@ -281,28 +224,7 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         let end = (start + CHUNK).min(n_frames);
         let processed: Vec<ProcessedFrame> = (start..end)
             .into_par_iter()
-            .map(|i| {
-                process_frame(
-                    &reader,
-                    &meta,
-                    i,
-                    params,
-                    filter_all_frames,
-                    frame_half_width,
-                    halo,
-                    msms_ref,
-                    dia_msms,
-                    smooth,
-                    watershed,
-                    box_centroid_params,
-                    dia_windows_ref,
-                    dia_window,
-                    dia_per_window,
-                    dia_ms1_ref,
-                    &ms1_indices,
-                    &ms1_pos,
-                )
-            })
+            .map(|i| process_frame(&reader, &meta, i, params, stages, &ctx))
             .collect::<Result<_>>()?;
 
         for pf in processed {
@@ -345,27 +267,56 @@ struct ProcessedFrame {
     summed_intensities: u64,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Per-run context for [`process_frame`]: the MS/MS keep sets and gates built
+/// once in [`denoise_with_progress`], plus the MS1-stream index maps. Lets the
+/// per-frame worker take the run's derived state as a single value.
+struct FrameCtx<'a> {
+    /// ddaPASEF per-precursor keep sets (`None` unless MS/MS denoising on ddaPASEF).
+    msms: Option<&'a MsmsKeep>,
+    /// diaPASEF MS/MS filter knobs (`None` unless MS/MS denoising on diaPASEF).
+    dia_msms: Option<&'a MsmsFilterParams>,
+    /// diaPASEF isolation windows (`None` for ddaPASEF or when unused).
+    dia_windows: Option<&'a DiaWindows>,
+    /// Built diaPASEF MS1 out-of-window gate (`None` when disabled / ddaPASEF).
+    dia_ms1: Option<&'a DiaMs1Gate>,
+    /// Built MS1 selection-polygon gate (`None` when disabled or no polygon).
+    polygon: Option<&'a PolygonGate>,
+    /// MS1-stream position -> global frame index (running-average pre-filter).
+    ms1_indices: &'a [usize],
+    /// Global frame index -> MS1-stream position (`None` for MS/MS frames).
+    ms1_pos: &'a [Option<usize>],
+}
+
 fn process_frame(
     reader: &FrameReader,
     meta: &[tdf::FrameMeta],
     i: usize,
     params: &FilterParams,
-    filter_all_frames: bool,
-    frame_half_width: usize,
-    halo: Option<&HaloParams>,
-    msms: Option<&MsmsKeep>,
-    dia_msms: Option<&MsmsFilterParams>,
-    smooth: Option<&SmoothParams>,
-    watershed: Option<&WatershedParams>,
-    box_centroid_params: Option<&BoxCentroidParams>,
-    dia_windows: Option<&DiaWindows>,
-    dia_window: Option<&DiaWindowParams>,
-    dia_per_window: bool,
-    dia_ms1: Option<&DiaMs1Gate>,
-    ms1_indices: &[usize],
-    ms1_pos: &[Option<usize>],
+    stages: &Stages,
+    ctx: &FrameCtx,
 ) -> Result<ProcessedFrame> {
+    // The stages that act per frame; the polygon/dia_ms1/denoise_msms knobs were
+    // already consumed into the gates and keep sets held by `ctx`.
+    let &Stages {
+        filter_all_frames,
+        frame_half_width,
+        halo,
+        smooth,
+        watershed,
+        box_centroid: box_centroid_params,
+        dia_window,
+        dia_per_window,
+        ..
+    } = stages;
+    let &FrameCtx {
+        msms,
+        dia_msms,
+        dia_windows,
+        dia_ms1,
+        polygon,
+        ms1_indices,
+        ms1_pos,
+    } = ctx;
     let meta_i = &meta[i];
     // Empty frames: timsrust cannot decode their absent payload, so emit the
     // canonical empty record directly (Bruker stores these too).
@@ -389,33 +340,39 @@ fn process_frame(
     let num_scans = flat.num_scans;
     let frame_id = flat.frame_id;
 
-    // Optional pre-filter smoothing (decoupled from the filter): replace this MS1
-    // frame with the centered running average of its MS1-frame neighborhood. The
-    // filter then runs on the smoothed frame exactly as it would on a raw one.
-    let smoothed;
-    let to_filter: &FlatFrame = if frame_half_width > 0 && meta_i.is_ms1() {
-        let p = ms1_pos[i].expect("MS1 frame must have an MS1-stream position");
-        let lo = p.saturating_sub(frame_half_width);
-        let hi = (p + frame_half_width).min(ms1_indices.len() - 1);
-        let mut neighbors: Vec<FlatFrame> = Vec::with_capacity(hi - lo);
-        for &gi in &ms1_indices[lo..=hi] {
-            // The center frame is already flattened; empty neighbors contribute nothing.
-            if gi == i || meta[gi].num_peaks == 0 {
-                continue;
+    // Optional cross-frame combine for the keep/drop DECISION only (frame_half_width
+    // > 0): sum this MS1 frame with its MS1-frame neighborhood into one spectrum,
+    // filter the combined spectrum, and keep this frame's NATIVE points whose
+    // (scan, tof) survive there. Neighbors raise signal-to-noise so a faint but
+    // persistent feature survives, exactly as the ddaPASEF MS/MS path combines a
+    // precursor's re-isolated scans before deciding (msms.rs::combine_and_filter).
+    // Unlike the old running-average smoother it never merges or averages points,
+    // so output stays a subset of the native frame with native intensities.
+    let neighborhood_keys: Option<HashSet<u64>> =
+        if frame_half_width > 0 && meta_i.is_ms1() && meta_i.num_peaks > 0 {
+            let p = ms1_pos[i].expect("MS1 frame must have an MS1-stream position");
+            let lo = p.saturating_sub(frame_half_width);
+            let hi = (p + frame_half_width).min(ms1_indices.len() - 1);
+            let mut neighbors: Vec<FlatFrame> = Vec::with_capacity(hi - lo);
+            for &gi in &ms1_indices[lo..=hi] {
+                if gi == i || meta[gi].num_peaks == 0 {
+                    continue;
+                }
+                let nf = reader.get(gi).map_err(|e| DnoiseError::FrameRead {
+                    index: gi,
+                    message: e.to_string(),
+                })?;
+                neighbors.push(FlatFrame::from_frame(&nf));
             }
-            let nf = reader.get(gi).map_err(|e| DnoiseError::FrameRead {
-                index: gi,
-                message: e.to_string(),
-            })?;
-            neighbors.push(FlatFrame::from_frame(&nf));
-        }
-        let mut window: Vec<&FlatFrame> = neighbors.iter().collect();
-        window.push(&flat);
-        smoothed = running_average(frame_id, num_scans, &window);
-        &smoothed
-    } else {
-        &flat
-    };
+            let mut window: Vec<&FlatFrame> = neighbors.iter().collect();
+            window.push(&flat);
+            Some(neighborhood_keep_keys(num_scans, &window, params, halo))
+        } else {
+            None
+        };
+    // Filtering, the DIA gates, survivors and any centroiding all operate on the
+    // native frame; the neighborhood only informs the MS1 keep mask above.
+    let to_filter: &FlatFrame = &flat;
 
     // diaPASEF isolation-window scan intervals for this frame (None for MS1, for
     // ddaPASEF, or when neither DIA feature is enabled). Drives both per-window
@@ -426,10 +383,18 @@ fn process_frame(
     // MS/MS frames: pruned by the precursor keep sets when MS/MS denoising is on,
     // otherwise re-encoded unchanged (or vertical-filtered if `filter_all_frames`).
     let mut keep = if meta_i.is_ms1() {
-        let mut keep = filter_iterated(to_filter, params);
-        if let Some(hp) = halo {
-            apply_halo(to_filter, hp, &mut keep);
-        }
+        let mut keep = if let Some(keys) = &neighborhood_keys {
+            // Prune native points by the combined-spectrum decision (mirrors MS/MS).
+            (0..to_filter.len())
+                .map(|j| keys.contains(&frame_key(to_filter.scan[j], to_filter.tof[j])))
+                .collect()
+        } else {
+            let mut keep = filter_iterated(to_filter, params);
+            if let Some(hp) = halo {
+                apply_halo(to_filter, hp, &mut keep);
+            }
+            keep
+        };
         // diaPASEF MS1 out-of-window gate: drop surviving points whose (scan, TOF)
         // is in no padded isolation window. Composes as an AND on the keep mask.
         if let Some(gate) = dia_ms1 {
@@ -438,6 +403,16 @@ fn process_frame(
                 .zip(gate.keep_mask(&to_filter.scan, &to_filter.tof))
             {
                 *slot &= in_win;
+            }
+        }
+        // MS1 selection-polygon gate: drop surviving points outside the run's IMS
+        // PolygonFilter region (never-selected precursor space). Also ANDed in.
+        if let Some(gate) = polygon {
+            for (slot, inside) in keep
+                .iter_mut()
+                .zip(gate.keep_mask(&to_filter.scan, &to_filter.tof))
+            {
+                *slot &= inside;
             }
         }
         keep
@@ -575,6 +550,45 @@ fn build_dia_ms1_gate(
     Ok(DiaMs1Gate::build(&tof_boxes, num_scans))
 }
 
+/// Build the MS1 selection-polygon gate: read the run's IMS PolygonFilter
+/// `(m/z, 1/K0)` vertices, convert them to per-scan TOF-index intervals via the
+/// run calibration (padded by `mz_pad` Da / `im_pad` 1/K0), and assemble the
+/// per-scan lookup. Returns `None` when the run stores no polygon so the gate is
+/// skipped.
+///
+/// **ddaPASEF only.** In ddaPASEF the IMS PolygonFilter is a single ring bounding
+/// the precursor-selection region. In diaPASEF the same property instead stores
+/// several disjoint quads (the window-placement anchors), which are *not* a
+/// selection region — and diaPASEF MS1 windowing is already handled by the
+/// [`crate::dia_ms1`] gate. So the polygon gate is skipped on any run that defines
+/// a diaPASEF window scheme, to avoid misreading those quads as one polygon.
+fn build_polygon_gate(
+    in_tdf: &Path,
+    p: &Ms1PolygonParams,
+    meta: &[tdf::FrameMeta],
+) -> Result<Option<PolygonGate>> {
+    if !tdf::read_dia_windows(in_tdf)?.is_empty() {
+        return Ok(None); // diaPASEF: the polygon property is multi-component here.
+    }
+    let Some((mz, im)) = tdf::read_selection_polygon(in_tdf)? else {
+        return Ok(None);
+    };
+    let md = MetadataReader::new(in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
+    let num_scans = meta.iter().map(|m| m.num_scans).max().unwrap_or(0);
+    if num_scans == 0 {
+        return Ok(None);
+    }
+    Ok(PolygonGate::build(
+        &mz,
+        &im,
+        num_scans,
+        |s| md.im_converter.convert(s),
+        |mz| md.mz_converter.invert(mz),
+        p.mz_pad,
+        p.im_pad,
+    ))
+}
+
 /// Run the horizontal-halo filter on the currently-kept points of `frame` and
 /// turn off `keep` for any the filter removes. Operates in integer
 /// `(scan, TOF index)` space — no calibration needed.
@@ -593,6 +607,57 @@ fn apply_halo(frame: &FlatFrame, hp: &HaloParams, keep: &mut [bool]) {
             keep[i] = false;
         }
     }
+}
+
+/// Pack an absolute `(scan, tof)` into a u64 key (scan in the high 32 bits).
+fn frame_key(scan: u32, tof: u32) -> u64 {
+    ((scan as u64) << 32) | tof as u64
+}
+
+/// Combine an MS1-frame neighborhood into one summed `(scan, tof)` spectrum, run the
+/// vertical + horizontal-halo filter on it, and return the surviving `(scan, tof)`
+/// keys. Used by the `frame_half_width` path: the combined spectrum only informs the
+/// keep/drop decision (raising signal-to-noise for persistent features); the caller
+/// prunes the current frame's native points by these keys, never merging intensities.
+/// Mirrors the ddaPASEF MS/MS combine-then-decide path (`msms.rs::combine_and_filter`).
+fn neighborhood_keep_keys(
+    num_scans: usize,
+    window: &[&FlatFrame],
+    params: &FilterParams,
+    halo: Option<&HaloParams>,
+) -> HashSet<u64> {
+    let mut acc: HashMap<u64, u64> = HashMap::new();
+    for f in window {
+        for k in 0..f.len() {
+            *acc.entry(frame_key(f.scan[k], f.tof[k])).or_insert(0) += f.intensity[k] as u64;
+        }
+    }
+    let mut scan = Vec::with_capacity(acc.len());
+    let mut tof = Vec::with_capacity(acc.len());
+    let mut intensity = Vec::with_capacity(acc.len());
+    for (&k, &sum) in &acc {
+        scan.push((k >> 32) as u32);
+        tof.push((k & 0xFFFF_FFFF) as u32);
+        intensity.push(sum.min(u32::MAX as u64) as u32);
+    }
+    let combined = FlatFrame {
+        frame_id: 0,
+        num_scans,
+        scan,
+        tof,
+        intensity,
+    };
+    let mut keep = filter_iterated(&combined, params);
+    if let Some(hp) = halo {
+        apply_halo(&combined, hp, &mut keep);
+    }
+    let mut out = HashSet::new();
+    for ((&keep_k, &scan), &tof) in keep.iter().zip(&combined.scan).zip(&combined.tof) {
+        if keep_k {
+            out.insert(frame_key(scan, tof));
+        }
+    }
+    out
 }
 
 /// Recursively copy `src` into `dst`, skipping a top-level entry named `skip_top`.

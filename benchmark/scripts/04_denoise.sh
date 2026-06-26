@@ -19,7 +19,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/_dataset.sh"
 DNOISE="$ROOT/../target/release/dnoise"
 CONFIG="${DNOISE_CONFIG:-$ROOT/config/dnoise.toml}"
 WCONFIG="${DNOISE_WATERSHED_CONFIG:-$ROOT/config/dnoise.watershed.toml}"
-DENOISE_ARMS="${DENOISE_ARMS:-ms1 msms}"   # space-separated subset of {ms1 msms wshed}
+ICONFIG="${DNOISE_INTENSITY_CONFIG:-$ROOT/config/dnoise.intensity.toml}"
+DENOISE_ARMS="${DENOISE_ARMS:-ms1 msms}"   # subset of {ms1 msms wshed intensity}
 FORCE="${DENOISE_FORCE:-0}"
 
 echo "dataset: $DATASET"
@@ -64,11 +65,26 @@ denoise_arm() {
   done
 }
 
+# Acquisition-aware noise gates, applied at denoise time (benchmark default):
+#   DDA -> drop MS1 outside the ddaPASEF/PASEF selection polygon (--ms1-polygon).
+#   DIA -> drop MS1 (--dia-ms1-window) and, on the MS/MS arm, MS/MS
+#          (--dia-window) points outside the diaPASEF isolation windows.
+# The polygon is DDA-only: diaPASEF stores a very restrictive polygon (~91% of
+# survey MS1) that would starve DIA-NN's MS1 quant, so DIA uses the per-window
+# gates instead. All gates are safe no-ops when their tables/polygon are absent.
+# --dia-window goes on the msms arm only, so the MS1-only "denoised" arm stays
+# MS1-only. Gate flags enter the .dnoise_stamp, so arms rebuild when they change.
+case "$DATASET" in
+  dia*) MS1_GATE=(--dia-ms1-window); MSMS_GATE=(--dia-ms1-window --dia-window) ;;
+  *)    MS1_GATE=(--ms1-polygon);    MSMS_GATE=(--ms1-polygon) ;;
+esac
+
 for arm in $DENOISE_ARMS; do
   case "$arm" in
-    ms1)   denoise_arm "$DEN"   ms1   "$CONFIG" ;;
-    msms)  denoise_arm "$MSMS"  msms  "$CONFIG" --denoise-msms ;;
-    wshed) denoise_arm "$WSHED" wshed "$WCONFIG" ;;
+    ms1)       denoise_arm "$DEN"   ms1       "$CONFIG"  "${MS1_GATE[@]}" ;;
+    msms)      denoise_arm "$MSMS"  msms      "$CONFIG"  --denoise-msms "${MSMS_GATE[@]}" ;;
+    wshed)     denoise_arm "$WSHED" wshed     "$WCONFIG" "${MS1_GATE[@]}" ;;
+    intensity) denoise_arm "$INT"   intensity "$ICONFIG" "${MS1_GATE[@]}" ;;
     *) echo "unknown arm: $arm" >&2; exit 1 ;;
   esac
 done

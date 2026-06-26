@@ -28,6 +28,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+# Keep all lettering >= 4.5 pt once the figure is downscaled to the text width.
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 13,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "figure.titlesize": 15,
+})
 import pandas as pd
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Rectangle
@@ -135,7 +145,7 @@ def main() -> int:
                                        fill=False, edgecolor="red", lw=1.2))
         ax[0, col].set_title(f"{label}  ({len(df):,} points)")
         sc, sub = zoom_scatter(ax[1, col], df, mz0, k0_0, norm)
-        ax[1, col].set_title(f"{label} — zoom ({len(sub):,} points)")
+        ax[1, col].set_title(f"{label}, zoom ({len(sub):,} points)")
     fig.colorbar(im, ax=ax[0, :].tolist(), label="summed intensity", shrink=0.8)
     fig.colorbar(sc, ax=ax[1, :].tolist(), label="intensity", shrink=0.8)
     fig.suptitle(f"{acq_label(dataset)} MS/MS frame before/after dnoise "

@@ -15,20 +15,24 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATASET="${DATASET:-dda_5min}"
 
 FILES="$ROOT/config/files.$DATASET.tsv"
-FASTA="$ROOT/data/fasta/hybrid.fasta"
+# FASTA is overridable per dataset (e.g. the UPS2+E.coli DB for the Pro 2 arm);
+# defaults to the shared HYE hybrid proteome.
+FASTA="${FASTA:-$ROOT/data/fasta/hybrid.fasta}"
 
 DATA="$ROOT/data/$DATASET"
 ZIPS="$DATA/zips"
 RAW="$DATA/raw"
-DEN="$DATA/denoised"          # MS1-only denoise arm
+DEN="$DATA/denoised"          # MS1-only denoise arm (streak: vertical+halo)
 MSMS="$DATA/denoised_msms"    # MS1 + MS/MS denoise arm
 WSHED="$DATA/watershed"       # MS1 vertical+halo + watershed centroider (Fig 6)
+INT="$DATA/denoised_intensity" # MS1 strict-intensity-threshold control arm
 
 RESULTS="$ROOT/results/$DATASET"
 RES_ORIGINAL="$RESULTS/original"
 RES_DENOISED="$RESULTS/denoised"
 RES_MSMS="$RESULTS/msms"
 RES_WSHED="$RESULTS/watershed"
+RES_INTENSITY="$RESULTS/intensity"
 RES_ANALYSIS="$RESULTS/analysis"
 
 export DATASET   # so child python (06/07) picks up the same namespace
