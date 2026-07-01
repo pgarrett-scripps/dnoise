@@ -40,9 +40,10 @@ use.
 
 ```bash
 dnoise <INPUT.d> <OUTPUT.d> [options]
+dnoise <INPUT.d> --in-place [options]
 ```
 
-The source folder is never modified; a new `.d` is written with a rewritten
+By default the source folder is never modified; a new `.d` is written with a rewritten
 `analysis.tdf_bin` (re-encoded as compression **type 2**) and an updated
 `analysis.tdf` (`Frames.TimsId/NumPeaks/MaxIntensity/SummedIntensities` and
 `GlobalMetadata.TimsCompressionType`). The leading reserved header that Bruker
@@ -52,12 +53,12 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--mz-half-width` | 2 | Column half-width in TOF indices (`[c-w, c+w]`). |
+| `--mz-half-width` | 3 | Column half-width in TOF indices (`[c-w, c+w]`). |
 | `--min-feature-length` | 5 | Minimum total span (scans) of a kept feature. |
-| `--max-internal-gap` | 1 | Max empty scans tolerated inside a feature. |
+| `--max-internal-gap` | 2 | Max empty scans tolerated inside a feature. |
 | `--min-window-intensity` | 0 | Per-scan summed-intensity floor for occupancy. |
 | `--min-feature-intensity` | 0 | Total summed-intensity floor for a kept feature. |
-| `--iterations` | 1 | Filter passes (each re-applies to prior survivors). |
+| `--iterations` | 2 | Filter passes (each re-applies to prior survivors). |
 | `--no-halo` | (on) | Disable the horizontal-halo filter, which runs after the vertical filter (see below). |
 | `--halo-peak-fraction` | 0.1 | Drop a peak below this fraction of its off-column box-max. |
 | `--halo-mz-idx-half-width` | 100 | Reference-box half-width along TOF index. |
@@ -75,9 +76,20 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 | `--threads` | all cores | Worker threads. |
 | `--config` / `-c` | — | Load parameters from a TOML file (see below). |
 | `--force` | off | Overwrite an existing output folder. |
+| `--in-place` | off | Denoise the input folder in place (omit `OUTPUT`); see below. |
 
 Filtering runs in parallel across frames (rayon); frames are written in order
 so binary offsets stay consistent.
+
+> **In-place denoising (`--in-place`).** Omit the `OUTPUT` argument and pass
+> `--in-place` to overwrite the input folder. dnoise still never edits the source
+> while reading it: it writes a temporary sibling folder (`<INPUT>.dnoise-tmp`)
+> and, only after a clean run, moves the original aside to `<INPUT>.dnoise-old`,
+> renames the new folder into place, and deletes the backup. If the final rename
+> fails the original is restored, so an interrupted run leaves the input intact
+> (plus a recoverable `.dnoise-tmp`/`.dnoise-old` sibling). The two renames are
+> atomic only when the temp folder lands on the same filesystem as the input,
+> which it does by construction.
 
 > **MS/MS denoising (ddaPASEF, opt-in via `--denoise-msms`).** ddaPASEF
 > fragments a precursor across one ion-mobility scan window repeated over several

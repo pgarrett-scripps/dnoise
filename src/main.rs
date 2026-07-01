@@ -16,8 +16,9 @@ use std::path::{Path, PathBuf};
 struct Cli {
     /// Input Bruker .d folder.
     input: PathBuf,
-    /// Output .d folder (created; must not exist unless --force).
-    output: PathBuf,
+    /// Output .d folder (created; must not exist unless --force). Omit when using
+    /// --in-place.
+    output: Option<PathBuf>,
 
     /// TOML config file with filter parameters. Explicit CLI flags override its values.
     #[arg(long, short = 'c', value_name = "FILE")]
@@ -190,6 +191,18 @@ struct Cli {
     /// Overwrite the output folder if it already exists.
     #[arg(long)]
     force: bool,
+    /// Denoise the input folder in place: write to a temporary sibling folder and,
+    /// on success, atomically replace the input with it. Omit the OUTPUT argument.
+    #[arg(long, conflicts_with = "output")]
+    in_place: bool,
+}
+
+/// Build a sibling path by appending `suffix` to `path`'s full name (so an
+/// `input.d` folder yields e.g. `input.d.dnoise-tmp`).
+fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 /// On-disk config. Every field is optional; missing keys fall back to CLI flags,
@@ -484,14 +497,47 @@ fn main() -> Result<()> {
         ms1_polygon: ms1_polygon_enabled.then_some(&ms1_polygon),
     };
 
+    // Resolve where to write. In-place mode writes to a temp sibling folder and
+    // swaps it over the input on success; otherwise the OUTPUT argument is used.
+    let out_path = if cli.in_place {
+        sibling_with_suffix(&cli.input, ".dnoise-tmp")
+    } else {
+        cli.output
+            .clone()
+            .context("provide an OUTPUT folder or use --in-place")?
+    };
+    // The temp folder is ours to clobber, so force-overwrite any stale leftover.
+    let force = cli.force || cli.in_place;
+
     let pb = ProgressBar::new(0);
     pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} frames").unwrap());
     let stats =
-        dnoise::denoise_with_progress(&cli.input, &cli.output, &params, &stages, cli.force, |p| {
+        dnoise::denoise_with_progress(&cli.input, &out_path, &params, &stages, force, |p| {
             pb.set_length(p.frames_total as u64);
             pb.set_position(p.frames_done as u64);
         })?;
     pb.finish_and_clear();
+
+    // In-place swap: move the original aside, install the denoised folder under the
+    // input's name, then drop the backup. On a failed install, restore the original.
+    if cli.in_place {
+        let backup = sibling_with_suffix(&cli.input, ".dnoise-old");
+        if backup.exists() {
+            std::fs::remove_dir_all(&backup)
+                .with_context(|| format!("removing stale backup {}", backup.display()))?;
+        }
+        std::fs::rename(&cli.input, &backup)
+            .with_context(|| format!("moving original {} aside", cli.input.display()))?;
+        if let Err(e) = std::fs::rename(&out_path, &cli.input) {
+            std::fs::rename(&backup, &cli.input).ok();
+            return Err(anyhow::Error::new(e).context(format!(
+                "installing denoised folder at {}; original restored",
+                cli.input.display()
+            )));
+        }
+        std::fs::remove_dir_all(&backup)
+            .with_context(|| format!("removing backup {}", backup.display()))?;
+    }
     let pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64
     } else {
