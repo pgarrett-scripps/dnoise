@@ -208,13 +208,11 @@ struct Cli {
     quiet: bool,
 }
 
-/// Install the stderr `tracing` subscriber. `RUST_LOG` (if set) wins; otherwise the
-/// level comes from `-v`/`-q`: quiet=warn, default=info, -v=debug, -vv=trace. Only
-/// the `dnoise` crate is set to that level (dependencies stay at `warn`) so the
-/// output is the pipeline's own narration, not noise from libraries.
-fn init_logging(verbose: u8, quiet: bool) {
-    use tracing_subscriber::{EnvFilter, fmt};
-    let level = if quiet {
+/// Map the `-v` (repeatable) / `-q` flags to the `dnoise` log level used when
+/// `RUST_LOG` is unset: `quiet` wins and forces `warn`; otherwise `-v` steps up
+/// info -> debug -> trace (saturating).
+fn verbosity_level(verbose: u8, quiet: bool) -> &'static str {
+    if quiet {
         "warn"
     } else {
         match verbose {
@@ -222,7 +220,16 @@ fn init_logging(verbose: u8, quiet: bool) {
             1 => "debug",
             _ => "trace",
         }
-    };
+    }
+}
+
+/// Install the stderr `tracing` subscriber. `RUST_LOG` (if set) wins; otherwise the
+/// level comes from `-v`/`-q`: quiet=warn, default=info, -v=debug, -vv=trace. Only
+/// the `dnoise` crate is set to that level (dependencies stay at `warn`) so the
+/// output is the pipeline's own narration, not noise from libraries.
+fn init_logging(verbose: u8, quiet: bool) {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let level = verbosity_level(verbose, quiet);
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("dnoise={level},warn")));
     fmt()
@@ -661,4 +668,23 @@ fn main() -> Result<()> {
         elapsed.as_secs_f64()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verbosity_level;
+
+    #[test]
+    fn verbosity_maps_v_flags_to_levels() {
+        assert_eq!(verbosity_level(0, false), "info");
+        assert_eq!(verbosity_level(1, false), "debug");
+        assert_eq!(verbosity_level(2, false), "trace");
+        assert_eq!(verbosity_level(9, false), "trace"); // saturates
+    }
+
+    #[test]
+    fn quiet_overrides_verbose() {
+        assert_eq!(verbosity_level(0, true), "warn");
+        assert_eq!(verbosity_level(3, true), "warn");
+    }
 }
