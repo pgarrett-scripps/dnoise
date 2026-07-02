@@ -6,9 +6,12 @@ use dnoise::{
     BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
     Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
 };
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+use tracing::{info, warn};
 
 /// Denoise a Bruker timsTOF .d folder via the iterative vertical-IM feature filter.
 #[derive(Parser)]
@@ -195,6 +198,38 @@ struct Cli {
     /// on success, atomically replace the input with it. Omit the OUTPUT argument.
     #[arg(long, conflicts_with = "output")]
     in_place: bool,
+
+    /// Increase log verbosity: -v adds debug detail, -vv adds trace. Logs go to
+    /// stderr; stdout carries only the final result line. Overridden by RUST_LOG.
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+    /// Quiet: log only warnings and errors. Overridden by RUST_LOG.
+    #[arg(short, long, conflicts_with = "verbose")]
+    quiet: bool,
+}
+
+/// Install the stderr `tracing` subscriber. `RUST_LOG` (if set) wins; otherwise the
+/// level comes from `-v`/`-q`: quiet=warn, default=info, -v=debug, -vv=trace. Only
+/// the `dnoise` crate is set to that level (dependencies stay at `warn`) so the
+/// output is the pipeline's own narration, not noise from libraries.
+fn init_logging(verbose: u8, quiet: bool) {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let level = if quiet {
+        "warn"
+    } else {
+        match verbose {
+            0 => "info",
+            1 => "debug",
+            _ => "trace",
+        }
+    };
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(format!("dnoise={level},warn")));
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(true)
+        .init();
 }
 
 /// Build a sibling path by appending `suffix` to `path`'s full name (so an
@@ -273,6 +308,7 @@ macro_rules! pick {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    init_logging(cli.verbose, cli.quiet);
 
     let cfg = match &cli.config {
         Some(path) => FileConfig::load(path)?,
@@ -497,6 +533,33 @@ fn main() -> Result<()> {
         ms1_polygon: ms1_polygon_enabled.then_some(&ms1_polygon),
     };
 
+    // Echo the effective configuration so a caller can confirm exactly which knobs
+    // and stages this run used (after config-file + CLI + default resolution) — the
+    // single most useful thing for reproducing or debugging a run.
+    info!(
+        mz_half_width = params.mz_half_width,
+        min_feature_length = params.min_feature_length,
+        max_internal_gap = params.max_internal_gap,
+        min_window_intensity = params.min_window_intensity,
+        min_feature_intensity = params.min_feature_intensity,
+        iterations = params.num_iterations,
+        "config: vertical filter"
+    );
+    info!(
+        all_frames,
+        frame_half_width,
+        halo = halo_enabled,
+        denoise_msms = msms_enabled,
+        smooth = smooth_enabled,
+        watershed = watershed_enabled,
+        box_centroid = box_centroid_enabled,
+        dia_window = dia_window_enabled,
+        dia_per_window,
+        dia_ms1 = dia_ms1_enabled,
+        ms1_polygon = ms1_polygon_enabled,
+        "config: enabled stages"
+    );
+
     // Resolve where to write. In-place mode writes to a temp sibling folder and
     // swaps it over the input on success; otherwise the OUTPUT argument is used.
     let out_path = if cli.in_place {
@@ -509,14 +572,48 @@ fn main() -> Result<()> {
     // The temp folder is ours to clobber, so force-overwrite any stale leftover.
     let force = cli.force || cli.in_place;
 
+    // Progress rendering adapts to the output: an interactive bar when stderr is a
+    // terminal, otherwise periodic log lines at ~10% steps so piped/captured output
+    // (e.g. an agent reading the logs) stays clean and line-oriented instead of
+    // filling with carriage-return bar redraws.
+    let interactive = std::io::stderr().is_terminal();
     let pb = ProgressBar::new(0);
-    pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} frames").unwrap());
-    let stats =
-        dnoise::denoise_with_progress(&cli.input, &out_path, &params, &stages, force, |p| {
-            pb.set_length(p.frames_total as u64);
-            pb.set_position(p.frames_done as u64);
-        })?;
+    if interactive {
+        pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} frames").unwrap());
+    } else {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    }
+    let start = Instant::now();
+    let mut last_decile = 0u64;
+    let result = dnoise::denoise_with_progress(&cli.input, &out_path, &params, &stages, force, |p| {
+        pb.set_length(p.frames_total as u64);
+        pb.set_position(p.frames_done as u64);
+        if !interactive && p.frames_total > 0 {
+            let pct = 100 * p.frames_done as u64 / p.frames_total as u64;
+            let decile = pct - pct % 10;
+            if decile > last_decile {
+                last_decile = decile;
+                info!(
+                    frames_done = p.frames_done,
+                    frames_total = p.frames_total,
+                    pct,
+                    "denoise: progress"
+                );
+            }
+        }
+    });
     pb.finish_and_clear();
+    // In-place mode owns the temp sibling folder, so clean up a partial one on
+    // failure rather than leaving it behind for the next run to clobber.
+    let stats = match result {
+        Ok(stats) => stats,
+        Err(e) => {
+            if cli.in_place {
+                std::fs::remove_dir_all(&out_path).ok();
+            }
+            return Err(e.into());
+        }
+    };
 
     // In-place swap: move the original aside, install the denoised folder under the
     // input's name, then drop the backup. On a failed install, restore the original.
@@ -535,17 +632,33 @@ fn main() -> Result<()> {
                 cli.input.display()
             )));
         }
-        std::fs::remove_dir_all(&backup)
-            .with_context(|| format!("removing backup {}", backup.display()))?;
+        // The swap already succeeded, so the denoised folder is correctly installed
+        // at the input path. Failing to remove the backup is not a failure of the
+        // operation — warn and leave it for manual cleanup instead of reporting the
+        // whole run as failed (which would misleadingly imply the data is bad).
+        if let Err(e) = std::fs::remove_dir_all(&backup) {
+            warn!(
+                input = %cli.input.display(),
+                backup = %backup.display(),
+                error = %e,
+                "denoised folder installed, but the backup could not be removed (leftover on disk)"
+            );
+        }
     }
+    let elapsed = start.elapsed();
     let pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64
     } else {
         0.0
     };
+    // Canonical result line on stdout (logs went to stderr): easy to grep/parse.
     println!(
-        "dnoise: {} frames, {} -> {} points kept ({:.1}%)",
-        stats.frames, stats.raw_points, stats.kept_points, pct
+        "dnoise: {} frames, {} -> {} points kept ({:.1}%) in {:.1}s",
+        stats.frames,
+        stats.raw_points,
+        stats.kept_points,
+        pct,
+        elapsed.as_secs_f64()
     );
     Ok(())
 }

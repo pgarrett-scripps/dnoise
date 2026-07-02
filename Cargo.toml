@@ -22,7 +22,14 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = ["cli"]
 # The `dnoise` command-line binary and its dependencies. Disable
 # (`--no-default-features`) to build only the library.
-cli = ["dep:anyhow", "dep:clap", "dep:indicatif", "dep:serde", "dep:toml"]
+cli = [
+    "dep:anyhow",
+    "dep:clap",
+    "dep:indicatif",
+    "dep:serde",
+    "dep:toml",
+    "dep:tracing-subscriber",
+]
 
 [[bin]]
 name = "dnoise"
@@ -38,6 +45,10 @@ thiserror = "2.0.18"
 # placeholder, so the feature does not compile. dnoise reads type-2 / uncompressed input
 # and always writes type-2; type-3 input support is blocked on upstream publishing timscompress.
 timsrust = { version = "0.4.2" }
+# Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
+# dnoise is used purely as a library), so the core has no runtime logging overhead
+# unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.
+tracing = "0.1"
 zstd = "0.13.3"
 
 # CLI-only dependencies (enabled by the `cli` feature).
@@ -46,6 +57,7 @@ clap = { version = "4.6.1", features = ["derive"], optional = true }
 indicatif = { version = "0.18.4", optional = true }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 toml = { version = "1.1.2", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [profile.release]
 lto = "thin"

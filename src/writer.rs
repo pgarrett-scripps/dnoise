@@ -24,6 +24,7 @@ use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use timsrust::converters::ConvertableDomain;
 use timsrust::readers::{FrameReader, MetadataReader};
+use tracing::{debug, info};
 
 /// Frames are read+filtered+encoded in parallel batches of this size, then the
 /// batch is written sequentially (so offsets stay ordered) before the next.
@@ -122,6 +123,29 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     // without timsrust, which cannot decode their absent payload.
     let meta = tdf::read_frame_meta(&in_tdf)?;
 
+    // Frame inventory + acquisition scheme, logged up front so a caller (human or
+    // agent) can see what kind of run this is and how much work it entails before
+    // any frames are written. Scheme is read straight off `MsMsType` (8 = ddaPASEF,
+    // 9 = diaPASEF) — no extra table reads.
+    let n_ms1 = meta.iter().filter(|m| m.is_ms1()).count();
+    let n_empty = meta.iter().filter(|m| m.num_peaks == 0).count();
+    let scheme = if meta.iter().any(|m| m.ms_ms_type == 9) {
+        "diaPASEF"
+    } else if meta.iter().any(|m| m.ms_ms_type == 8) {
+        "ddaPASEF"
+    } else {
+        "MS1-only/unknown"
+    };
+    info!(input = %input.display(), output = %output.display(), "denoise: starting");
+    info!(
+        scheme,
+        frames = n_frames,
+        ms1 = n_ms1,
+        msms = n_frames - n_ms1,
+        empty = n_empty,
+        "denoise: frame inventory"
+    );
+
     // MS1 subsequence used by the running-average pre-filter: `ms1_indices` maps a
     // position in the MS1-only stream to a global frame index; `ms1_pos` is the
     // reverse (None for MS/MS frames). The window skips interleaved MS/MS frames.
@@ -144,12 +168,15 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         Some(mp) => {
             let windows = tdf::read_pasef_msms(&in_tdf)?;
             if windows.is_empty() {
+                info!("MS/MS denoise: diaPASEF whole-frame path (no PasefFrameMsMsInfo)");
                 (None, Some(mp))
             } else {
-                (
-                    Some(build_msms_keep(&reader, &meta, &windows, mp, halo)?),
-                    None,
-                )
+                let keep = build_msms_keep(&reader, &meta, &windows, mp, halo)?;
+                info!(
+                    isolation_events = windows.len(),
+                    "MS/MS denoise: ddaPASEF per-precursor path"
+                );
+                (Some(keep), None)
             }
         }
         None => (None, None),
@@ -161,7 +188,13 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     // (`dia_per_window`). Empty for ddaPASEF, so both features no-op there.
     let dia_windows: Option<DiaWindows> = if dia_window.is_some() || dia_per_window {
         let w = tdf::read_dia_windows(&in_tdf)?;
-        if w.is_empty() { None } else { Some(w) }
+        if w.is_empty() {
+            debug!("diaPASEF window feature requested but no windows found (ddaPASEF?) — skipped");
+            None
+        } else {
+            info!("diaPASEF isolation-window scheme loaded");
+            Some(w)
+        }
     } else {
         None
     };
@@ -173,6 +206,12 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta)?,
         None => None,
     };
+    if dia_ms1.is_some() {
+        match &dia_ms1_gate {
+            Some(_) => info!("diaPASEF MS1 out-of-window gate active"),
+            None => debug!("diaPASEF MS1 gate requested but no isolation windows — skipped"),
+        }
+    }
     let dia_ms1_ref = dia_ms1_gate.as_ref();
 
     // MS1 selection-polygon gate: build the per-scan TOF lookup once from the
@@ -181,6 +220,14 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
         None => None,
     };
+    if ms1_polygon.is_some() {
+        match &polygon_gate {
+            Some(_) => info!("MS1 selection-polygon gate active"),
+            None => {
+                debug!("MS1 polygon gate requested but run stores no usable polygon — skipped")
+            }
+        }
+    }
     let polygon_ref = polygon_gate.as_ref();
 
     let out_bin = output.join("analysis.tdf_bin");
@@ -250,6 +297,21 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     drop(bin);
 
     tdf::update_metadata(&output.join("analysis.tdf"), &updates)?;
+
+    let kept_pct = if raw_points > 0 {
+        // Round to 2 decimals so the log field is readable (e.g. 36.64, not
+        // 36.635067948941554).
+        ((10_000.0 * kept_points as f64 / raw_points as f64).round()) / 100.0
+    } else {
+        0.0
+    };
+    info!(
+        frames = n_frames,
+        raw_points,
+        kept_points,
+        kept_pct,
+        "denoise: complete"
+    );
 
     Ok(DenoiseStats {
         frames: n_frames,

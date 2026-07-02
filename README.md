@@ -165,6 +165,34 @@ all_frames = false
 # threads = 8
 ```
 
+### Logging
+
+`dnoise` narrates each run on **stderr** and prints only the final result line on
+**stdout**, so the two streams can be captured independently (handy for scripts and
+AI tooling):
+
+```bash
+dnoise <INPUT.d> <OUTPUT.d> 2> run.log      # logs to run.log, result to the console
+```
+
+The logs are structured, one event per line, and cover the effective configuration
+(every resolved knob and which stages are enabled), the detected acquisition scheme
+(ddaPASEF / diaPASEF / MS1-only) and frame inventory, which gates activated or were
+skipped and why, progress, and a final `denoise: complete` with raw/kept point
+counts. Example (abridged):
+
+```text
+INFO dnoise: config: enabled stages halo=true ms1_polygon=true denoise_msms=false ...
+INFO dnoise::writer: denoise: frame inventory scheme="ddaPASEF" frames=8639 ms1=786 msms=7853 empty=0
+INFO dnoise::writer: MS1 selection-polygon gate active
+INFO dnoise::writer: denoise: complete frames=8639 raw_points=300509979 kept_points=110092035 kept_pct=36.64
+```
+
+Verbosity: `-v` adds debug detail (e.g. why a requested gate was skipped), `-vv`
+adds trace; `-q` limits output to warnings and errors. For fine-grained control set
+`RUST_LOG` (e.g. `RUST_LOG=dnoise=debug`), which overrides the flags. When stderr is
+an interactive terminal a progress bar is shown instead of periodic progress lines.
+
 ## Library usage
 
 Two API tiers are exposed (full docs on [docs.rs](https://docs.rs/dnoise)):
