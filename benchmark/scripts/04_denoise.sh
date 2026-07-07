@@ -3,9 +3,12 @@
 #   ms1   -> data/<DATASET>/denoised        (vertical+halo on MS1 only)
 #   msms  -> data/<DATASET>/denoised_msms   (MS1 + per-precursor MS/MS denoise)
 #   wshed -> data/<DATASET>/watershed       (MS1 vertical+halo + watershed centroider, Fig 6)
+#   intensity      -> data/<DATASET>/denoised_intensity      (matched MS1-only threshold control)
+#   intensity_msms -> data/<DATASET>/denoised_intensity_msms (matched MS1+MS/MS threshold control)
 # ms1/msms use config/dnoise.toml (msms adds --denoise-msms); wshed uses
-# config/dnoise.watershed.toml. Default arms are "ms1 msms"; opt into the
-# watershed arm with DENOISE_ARMS=wshed (or "ms1 msms wshed").
+# config/dnoise.watershed.toml; intensity/intensity_msms use the calibrated
+# dnoise.intensity*.toml configs. Default arms are "ms1 msms"; opt into others
+# via DENOISE_ARMS (e.g. "ms1 msms wshed intensity intensity_msms").
 #
 # STALE-FILE GUARD: each output .d carries a .dnoise_stamp = sha256(config) +
 # dnoise version + arm. An output is reused only if its stamp matches the
@@ -20,7 +23,8 @@ DNOISE="$ROOT/../target/release/dnoise"
 CONFIG="${DNOISE_CONFIG:-$ROOT/config/dnoise.toml}"
 WCONFIG="${DNOISE_WATERSHED_CONFIG:-$ROOT/config/dnoise.watershed.toml}"
 ICONFIG="${DNOISE_INTENSITY_CONFIG:-$ROOT/config/dnoise.intensity.toml}"
-DENOISE_ARMS="${DENOISE_ARMS:-ms1 msms}"   # subset of {ms1 msms wshed intensity}
+IMCONFIG="${DNOISE_INTENSITY_MSMS_CONFIG:-$ROOT/config/dnoise.intensity_msms.toml}"
+DENOISE_ARMS="${DENOISE_ARMS:-ms1 msms}"   # subset of {ms1 msms wshed intensity intensity_msms}
 FORCE="${DENOISE_FORCE:-0}"
 
 echo "dataset: $DATASET"
@@ -85,6 +89,7 @@ for arm in $DENOISE_ARMS; do
     msms)      denoise_arm "$MSMS"  msms      "$CONFIG"  --denoise-msms "${MSMS_GATE[@]}" ;;
     wshed)     denoise_arm "$WSHED" wshed     "$WCONFIG" "${MS1_GATE[@]}" ;;
     intensity) denoise_arm "$INT"   intensity "$ICONFIG" "${MS1_GATE[@]}" ;;
+    intensity_msms) denoise_arm "$INTMSMS" intensity_msms "$IMCONFIG" --denoise-msms "${MSMS_GATE[@]}" ;;
     *) echo "unknown arm: $arm" >&2; exit 1 ;;
   esac
 done

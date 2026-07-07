@@ -35,7 +35,13 @@ from _metrics import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ARMS = {"original": "original", "denoised": "streak", "intensity": "intensity"}
+ARMS = {
+    "original": "original",
+    "denoised": "streak",
+    "intensity": "intensity",
+    "msms": "streak_msms",
+    "intensity_msms": "intensity_msms",
+}
 MIN_PEPTIDES = 2  # two-peptide rule for quant reporting (S6 only)
 
 

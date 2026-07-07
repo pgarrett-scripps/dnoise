@@ -64,9 +64,14 @@ RESULTS = ROOT / "results" / DATASET
 OUT = RESULTS / "analysis"
 FASTA = ROOT / "data" / "fasta" / "hybrid.fasta"  # the prefixed (Sage) FASTA
 
-CANDIDATE_ARMS = ["original", "denoised", "msms"]
+CANDIDATE_ARMS = ["original", "denoised", "msms", "intensity", "intensity_msms"]
 # Colorblind-safe (Wong, Nat. Methods 2011); avoids the red/green pairing.
-ARM_COLOR = {"original": "#0072B2", "denoised": "#E69F00", "msms": "#009E73"}
+# intensity/intensity_msms reuse the same hues as the DDA intensity-control
+# figure (26_intensity_main_figure.py) for cross-figure consistency.
+ARM_COLOR = {
+    "original": "#0072B2", "denoised": "#E69F00", "msms": "#009E73",
+    "intensity": "#D55E00", "intensity_msms": "#CC79A7",
+}
 
 
 # ---------- species map (accession -> HUMAN/YEAST/ECOLI, else None) ----------

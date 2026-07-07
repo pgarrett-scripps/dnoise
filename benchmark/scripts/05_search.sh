@@ -3,7 +3,8 @@
 #   original -> results/<DATASET>/original   (data/<DATASET>/raw)
 #   denoised -> results/<DATASET>/denoised   (data/<DATASET>/denoised, MS1)
 #   msms     -> results/<DATASET>/msms        (data/<DATASET>/denoised_msms)
-# The msms arm is searched only if its denoised_msms .d folders exist.
+#   intensity / intensity_msms -> matched intensity-threshold control arms
+# Each optional arm is searched only if its .d folders exist.
 #
 # Uses the Sage 0.15.0-beta.1 prebuilt, which does timsTOF ion-mobility LFQ
 # directly on .d (verified: populated lfq.tsv). The 0.14.6 stable that is usually
@@ -50,6 +51,7 @@ den=( "$DEN"/*.d )
 msms=( "$MSMS"/*.d )
 wshed=( "$WSHED"/*.d )
 intensity=( "$INT"/*.d )
+intmsms=( "$INTMSMS"/*.d )
 [ ${#raw[@]} -gt 0 ] || { echo "no raw .d in $RAW — run 03/04_unzip"; exit 1; }
 [ ${#den[@]} -gt 0 ] || { echo "no MS1-denoised .d in $DEN — run 04_denoise.sh"; exit 1; }
 
@@ -69,5 +71,10 @@ if [ ${#intensity[@]} -gt 0 ]; then
   run_arm "$RES_INTENSITY" "${intensity[@]}"
 else
   echo "no intensity-threshold .d in $INT — skipping intensity arm"
+fi
+if [ ${#intmsms[@]} -gt 0 ]; then
+  run_arm "$RES_INTMSMS" "${intmsms[@]}"
+else
+  echo "no intensity_msms .d in $INTMSMS — skipping intensity_msms arm"
 fi
 echo "done."

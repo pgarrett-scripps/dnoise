@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
-# DIA-NN search for a diaPASEF DATASET (dia_5min / dia_15min), 3 arms:
-#   original  (RAW)   -> results/<DATASET>/original
-#   denoised  (DEN)   -> results/<DATASET>/denoised   (MS1-only dnoise)
-#   msms      (MSMS)  -> results/<DATASET>/msms        (MS1 + whole-frame MS2 dnoise)
+# DIA-NN search for a diaPASEF DATASET (dia_5min / dia_15min):
+#   original       (RAW)     -> results/<DATASET>/original
+#   denoised       (DEN)     -> results/<DATASET>/denoised        (MS1-only dnoise)
+#   msms           (MSMS)    -> results/<DATASET>/msms            (MS1 + whole-frame MS2 dnoise)
+#   intensity      (INT)     -> results/<DATASET>/intensity       (matched MS1-only threshold)
+#   intensity_msms (INTMSMS) -> results/<DATASET>/intensity_msms  (matched MS1+MS2 threshold)
+# The intensity/intensity_msms arms are the streak-vs-threshold control (see
+# 56_recalib_intensity_dia.py) and, like denoised/msms, MUST be searched with
+# DIANN_FULL_LIB=1 to stay comparable (fair, denoise-independent full predicted
+# library) -- never the default raw-lib-reuse, which would scope them to the
+# raw-detectable set instead.
 #
 # Engine: DIA-NN (library-free / predicted spectral library), reads Bruker .d
 # directly. Set DIANN_BIN to the diann-linux CLI (default: the installed 2.2.0).
@@ -159,4 +166,6 @@ else
 fi
 run_arm "$DEN"  "$RES_DENOISED"
 run_arm "$MSMS" "$RES_MSMS"   # whole-frame MS2 dnoise arm (skipped if absent)
+run_arm "$INT"     "$RES_INTENSITY"  # matched MS1-only threshold (skipped if absent)
+run_arm "$INTMSMS" "$RES_INTMSMS"    # matched MS1+MS2 threshold (skipped if absent)
 echo "done."

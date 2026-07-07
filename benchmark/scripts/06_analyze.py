@@ -38,10 +38,11 @@ RESULTS = ROOT / "results" / DATASET
 OUT = RESULTS / "analysis"
 # Arms compared, in order; only those with a Sage result on disk are included.
 # "msms" is the MS1+MS/MS-denoised arm (present only after a --denoise-msms run).
-CANDIDATE_ARMS = ["original", "denoised", "intensity", "msms"]
+CANDIDATE_ARMS = ["original", "denoised", "intensity", "msms", "intensity_msms"]
 ARMS = [a for a in CANDIDATE_ARMS if (RESULTS / a / "results.sage.tsv").is_file()]
 ARM_COLOR = {"original": "#1f77b4", "denoised": "#d62728",
-             "intensity": "#9467bd", "msms": "#2ca02c"}
+             "intensity": "#9467bd", "msms": "#2ca02c",
+             "intensity_msms": "#CC79A7"}
 
 
 # ---------- plots ----------

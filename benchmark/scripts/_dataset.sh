@@ -26,6 +26,7 @@ DEN="$DATA/denoised"          # MS1-only denoise arm (streak: vertical+halo)
 MSMS="$DATA/denoised_msms"    # MS1 + MS/MS denoise arm
 WSHED="$DATA/watershed"       # MS1 vertical+halo + watershed centroider (Fig 6)
 INT="$DATA/denoised_intensity" # MS1 strict-intensity-threshold control arm
+INTMSMS="$DATA/denoised_intensity_msms" # MS1+MS/MS strict-intensity-threshold control arm
 
 RESULTS="$ROOT/results/$DATASET"
 RES_ORIGINAL="$RESULTS/original"
@@ -33,6 +34,7 @@ RES_DENOISED="$RESULTS/denoised"
 RES_MSMS="$RESULTS/msms"
 RES_WSHED="$RESULTS/watershed"
 RES_INTENSITY="$RESULTS/intensity"
+RES_INTMSMS="$RESULTS/intensity_msms"
 RES_ANALYSIS="$RESULTS/analysis"
 
 export DATASET   # so child python (06/07) picks up the same namespace
