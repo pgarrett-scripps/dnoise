@@ -155,7 +155,10 @@ run_arm() {
 }
 
 [ -d "$RAW" ]  || { echo "no raw .d in $RAW -- run 04_unzip.sh"   >&2; exit 1; }
-[ -d "$DEN" ]  || { echo "no MS1-denoised .d in $DEN -- run 04_denoise.sh" >&2; exit 1; }
+# NOTE: no hard precondition on $DEN existing -- its .d copies are routinely
+# deleted after their own search completes (storage discipline), and run_arm
+# already skips gracefully (via its own no-.d-files check) when a report.parquet
+# already exists on disk from that prior search.
 
 if [ "$REUSE_ACTIVE" = "1" ]; then
   echo "=== original arm: kept as-is (it IS the reused raw library; raw unchanged) ==="

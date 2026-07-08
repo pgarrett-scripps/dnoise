@@ -53,10 +53,20 @@ wshed=( "$WSHED"/*.d )
 intensity=( "$INT"/*.d )
 intmsms=( "$INTMSMS"/*.d )
 [ ${#raw[@]} -gt 0 ] || { echo "no raw .d in $RAW — run 03/04_unzip"; exit 1; }
-[ ${#den[@]} -gt 0 ] || { echo "no MS1-denoised .d in $DEN — run 04_denoise.sh"; exit 1; }
 
 run_arm "$RES_ORIGINAL" "${raw[@]}"
-run_arm "$RES_DENOISED" "${den[@]}"
+# The streak MS1 arm's .d copies are routinely deleted after its own search
+# completes (storage discipline for later arm additions), so a missing $DEN is
+# only a hard error if there's no prior search to fall back on -- run_arm's own
+# "skip (exists)" check handles the already-searched case even with den empty.
+if [ ${#den[@]} -gt 0 ]; then
+  run_arm "$RES_DENOISED" "${den[@]}"
+elif [ -f "$RES_DENOISED/results.sage.tsv" ] && [ -f "$RES_DENOISED/lfq.tsv" ]; then
+  echo "skip (exists, .d already cleaned up): denoised"
+else
+  echo "no MS1-denoised .d in $DEN and no prior results in $RES_DENOISED — run 04_denoise.sh" >&2
+  exit 1
+fi
 if [ ${#msms[@]} -gt 0 ]; then
   run_arm "$RES_MSMS" "${msms[@]}"
 else
