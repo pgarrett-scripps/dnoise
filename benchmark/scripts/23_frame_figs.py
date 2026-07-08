@@ -59,7 +59,10 @@ def dump(d: Path, idx: int, out: Path) -> pd.DataFrame:
     return pd.read_csv(out)
 
 
-def frame_fig(cols: list[tuple[str, Path]], out: Path, title: str) -> None:
+def frame_fig(cols: list[tuple[str, Path]], out: Path, title: str, zoom_only: bool = False) -> None:
+    """zoom_only=True drops the full-frame top row, keeping just the zoomed
+    detail (a single row of panels) -- for figures where the full-frame view
+    doesn't add information beyond what the zoom already shows."""
     raw_d = cols[0][1]
     idx = most_intense_ms1_index(raw_d)
     with tempfile.TemporaryDirectory() as tmp:
@@ -69,10 +72,30 @@ def frame_fig(cols: list[tuple[str, Path]], out: Path, title: str) -> None:
     mz0, k0 = float(peak["mz"]), float(peak["one_over_k0"])
     vmax = float(raw["intensity"].max())
     norm = LogNorm(vmin=1, vmax=vmax)
+
+    n = len(cols)
+    if zoom_only:
+        fig, ax = plt.subplots(1, n, figsize=(4.6 * n, 4.6))
+        sc = None
+        for j, (lab, df) in enumerate(frames):
+            sub = df[df["mz"].between(mz0 - MZ_HALF, mz0 + MZ_HALF)
+                     & df["one_over_k0"].between(k0 - K0_HALF, k0 + K0_HALF)]
+            sc = ax[j].scatter(sub["mz"], sub["one_over_k0"], c=sub["intensity"],
+                               norm=norm, cmap=CMAP, s=9, edgecolors="none")
+            ax[j].set_xlim(mz0 - MZ_HALF, mz0 + MZ_HALF); ax[j].set_ylim(k0 - K0_HALF, k0 + K0_HALF)
+            ax[j].set_title(f"{lab}, zoom ({len(sub):,} pts)")
+            ax[j].set_xlabel("m/z"); ax[j].set_ylabel("ion mobility (1/K0)")
+        fig.colorbar(sc, ax=ax.tolist(), label="intensity", shrink=0.8)
+        fig.suptitle(title, fontsize=13)
+        FIGS.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"wrote {out}")
+        return
+
     mz_e = np.linspace(raw["mz"].min(), raw["mz"].max(), 400)
     k0_e = np.linspace(raw["one_over_k0"].min(), raw["one_over_k0"].max(), 300)
 
-    n = len(cols)
     # Extra hspace so the top row's "m/z" xlabel does not collide with the
     # bottom row's titles.
     fig, ax = plt.subplots(2, n, figsize=(4.6 * n, 9.2),
@@ -118,6 +141,7 @@ def main() -> int:
          ("box", DATA / "box" / F)],
         FIGS / "fig5_frames.png",
         "MS1 frame after the two centroiders (watershed collapses; box tiles)",
+        zoom_only=True,
     )
     frame_fig(
         [("raw", DATA / "raw" / F),
