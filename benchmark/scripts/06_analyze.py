@@ -153,23 +153,29 @@ def plot_ids(summary: pd.DataFrame) -> None:
 
 
 def plot_accuracy(acc: pd.DataFrame) -> None:
-    """Observed vs expected median log2 ratio across all pairs/species/arms —
-    shows accuracy across the full dynamic range (−2.7 to +3.3)."""
+    """Residual (observed - expected) vs expected median log2 ratio across all
+    pairs/species/arms -- shows accuracy across the full dynamic range
+    (-2.7 to +3.3). Plotting the residual rather than observed directly makes
+    the ideal line horizontal (at 0) instead of a 45deg diagonal, so arms that
+    overlap tightly in an observed-vs-expected view separate out clearly."""
     fig, ax = plt.subplots(figsize=(6, 6))
-    lim = (-3.5, 4.0)
-    ax.plot(lim, lim, color="gray", ls="--", lw=1, zorder=0, label="ideal")
+    xlim = (-3.5, 4.0)
+    resid = acc["observed"] - acc["expected"]
+    pad = max(0.3, 0.15 * (resid.max() - resid.min())) if len(resid) else 0.3
+    ylo, yhi = (resid.min() - pad, resid.max() + pad) if len(resid) else (-1, 1)
+    ax.axhline(0, color="gray", ls="--", lw=1, zorder=0, label="ideal")
     marker = {"HUMAN": "o", "YEAST": "s", "ECOLI": "^"}
     for arm in ARMS:
         d = acc[acc["arm"] == arm]
         for sp in SPECIES:
             ds = d[d["species"] == sp]
-            ax.scatter(ds["expected"], ds["observed"], color=ARM_COLOR.get(arm),
+            ax.scatter(ds["expected"], ds["observed"] - ds["expected"], color=ARM_COLOR.get(arm),
                        marker=marker[sp], s=45, alpha=0.8,
                        label=arm if sp == "HUMAN" else None)
-    ax.set_xlim(*lim)
-    ax.set_ylim(*lim)
+    ax.set_xlim(*xlim)
+    ax.set_ylim(ylo, yhi)
     ax.set_xlabel("expected log2 ratio")
-    ax.set_ylabel("observed median log2 ratio")
+    ax.set_ylabel("observed − expected (log2)")
     ax.set_title("LFQ accuracy across the dynamic range\n(A/B, A/C, B/C; ○ human △ ecoli □ yeast)")
     ax.legend(title="arm")
     fig.tight_layout()

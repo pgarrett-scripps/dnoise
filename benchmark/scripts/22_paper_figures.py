@@ -113,16 +113,17 @@ def make_fig(labels: list[str], title: str, out: Path) -> None:
     lo = min(rows[l]["n_quant"] for l in labels)
     ax[1].set_ylim(lo * 0.95, max(rows[l]["n_quant"] for l in labels) * 1.02)
 
-    # Panel 3: LFQ accuracy (observed vs expected, all pairs/species)
-    lim = (-3.5, 4.0)
-    ax[2].plot(lim, lim, color="gray", ls="--", lw=1, zorder=0)
+    # Panel 3: LFQ accuracy, residual (observed - expected) vs expected
+    xlim = (-3.5, 4.0)
+    ylo, yhi = _resid_ylim([[(rows[l]["color"], rows[l]["acc"]) for l in labels]])
+    ax[2].axhline(0, color="gray", ls="--", lw=1, zorder=0)
     for lab in labels:
         for a in rows[lab]["acc"]:
-            ax[2].scatter(a["expected"], a["observed"], color=rows[lab]["color"],
+            ax[2].scatter(a["expected"], a["observed"] - a["expected"], color=rows[lab]["color"],
                           marker=MARK[a["species"]], s=60, alpha=0.8)
         ax[2].scatter([], [], color=rows[lab]["color"], label=lab)  # legend proxy
-    ax[2].set_xlim(*lim); ax[2].set_ylim(*lim)
-    ax[2].set_xlabel("expected log2 ratio"); ax[2].set_ylabel("observed median log2")
+    ax[2].set_xlim(*xlim); ax[2].set_ylim(ylo, yhi)
+    ax[2].set_xlabel("expected log2 ratio"); ax[2].set_ylabel("observed − expected (log2)")
     ax[2].set_title("LFQ accuracy (○ human △ ecoli □ yeast)")
     ax[2].legend(fontsize=11)
 
@@ -143,16 +144,35 @@ def compress(dataset: str, dsub: str) -> tuple[int, int]:
     return ms1, b
 
 
-def _acc_scatter(ax, series, title="LFQ accuracy (○ human △ ecoli □ yeast)"):
-    """series: list of (color, [accuracy-dicts])."""
-    lim = (-3.5, 4.0)
-    ax.plot(lim, lim, color="gray", ls="--", lw=1, zorder=0)
+def _resid_ylim(series_list, pad_frac: float = 0.15, min_pad: float = 0.3):
+    """series_list: list of `series` (each a list of (color, [accuracy-dicts])).
+    Shared y-limits for a residual (observed - expected) scatter, computed
+    across ALL series passed in so multiple panels (e.g. one per gradient)
+    share one y-scale for a fair visual comparison."""
+    resid = [a["observed"] - a["expected"]
+             for series in series_list for _, acc in series for a in acc]
+    if not resid:
+        return (-1.0, 1.0)
+    pad = max(min_pad, pad_frac * (max(resid) - min(resid)))
+    return (min(resid) - pad, max(resid) + pad)
+
+
+def _acc_scatter(ax, series, title="LFQ accuracy (○ human △ ecoli □ yeast)", ylim=None):
+    """series: list of (color, [accuracy-dicts]). Plots the RESIDUAL
+    (observed − expected) against expected, so the ideal line is horizontal
+    at 0 instead of a 45° diagonal — arms that overlap tightly along the
+    diagonal in an observed-vs-expected view separate out much more clearly
+    once the shared slope is subtracted off. Pass `ylim` to share a y-scale
+    across multiple panels; otherwise it is computed from this series alone."""
+    xlim = (-3.5, 4.0)
+    ylo, yhi = ylim if ylim is not None else _resid_ylim([series])
+    ax.axhline(0, color="gray", ls="--", lw=1, zorder=0)
     for color, acc in series:
         for a in acc:
-            ax.scatter(a["expected"], a["observed"], color=color,
+            ax.scatter(a["expected"], a["observed"] - a["expected"], color=color,
                        marker=MARK[a["species"]], s=60, alpha=0.75)
-    ax.set_xlim(*lim); ax.set_ylim(*lim)
-    ax.set_xlabel("expected log2 ratio"); ax.set_ylabel("observed median log2")
+    ax.set_xlim(*xlim); ax.set_ylim(ylo, yhi)
+    ax.set_xlabel("expected log2 ratio"); ax.set_ylabel("observed − expected (log2)")
     ax.set_title(title)
 
 
@@ -180,9 +200,11 @@ def _arm3_quad(binpct, quant, acc, arms, grads, title, out) -> None:
         a.bar_label(bars, fmt="%d", fontsize=11, padding=1)
     a.set_ylabel("proteins quantified (1% FDR)"); a.set_title("Quantification coverage")
     a.set_xticks(x); a.set_xticklabels([ARM3_LABEL[m] for m in arms]); a.legend(fontsize=11, loc="upper left")
-    # [1,0],[1,1] LFQ accuracy, one panel per gradient (arms colored)
+    # [1,0],[1,1] LFQ accuracy, one panel per gradient (arms colored), shared y-scale
+    acc_ylim = _resid_ylim([acc[g] for g in grads])
     for col, g in enumerate(grads):
-        _acc_scatter(ax[1, col], acc[g], title=f"LFQ accuracy, {GL[g]} (○ human △ ecoli □ yeast)")
+        _acc_scatter(ax[1, col], acc[g], title=f"LFQ accuracy, {GL[g]} (○ human △ ecoli □ yeast)",
+                     ylim=acc_ylim)
     for m in arms:
         ax[1, 0].scatter([], [], color=ARM3_COLOR[m], label=ARM3_LABEL[m])
     ax[1, 0].legend(fontsize=11)

@@ -346,21 +346,27 @@ def plot_cv(frames: dict[str, pd.DataFrame | None], arms: list[str]) -> None:
 
 
 def plot_accuracy(acc: pd.DataFrame, arms: list[str]) -> None:
+    """Residual (observed - expected) vs expected: the ideal line is
+    horizontal at 0 rather than a 45deg diagonal, so overlapping arms
+    separate out much more clearly than an observed-vs-expected view."""
     fig, ax = plt.subplots(figsize=(6, 6))
-    lim = (-3.5, 4.0)
-    ax.plot(lim, lim, color="gray", ls="--", lw=1, zorder=0, label="ideal")
+    xlim = (-3.5, 4.0)
+    resid = acc["observed"] - acc["expected"]
+    pad = max(0.3, 0.15 * (resid.max() - resid.min())) if len(resid) else 0.3
+    ylo, yhi = (resid.min() - pad, resid.max() + pad) if len(resid) else (-1, 1)
+    ax.axhline(0, color="gray", ls="--", lw=1, zorder=0, label="ideal")
     marker = {"HUMAN": "o", "YEAST": "s", "ECOLI": "^"}
     for arm in arms:
         d = acc[acc["arm"] == arm]
         for sp in SPECIES:
             ds = d[d["species"] == sp]
-            ax.scatter(ds["expected"], ds["observed"], color=ARM_COLOR.get(arm),
+            ax.scatter(ds["expected"], ds["observed"] - ds["expected"], color=ARM_COLOR.get(arm),
                        marker=marker[sp], s=45, alpha=0.8,
                        label=arm if sp == "HUMAN" else None)
-    ax.set_xlim(*lim)
-    ax.set_ylim(*lim)
+    ax.set_xlim(*xlim)
+    ax.set_ylim(ylo, yhi)
     ax.set_xlabel("expected log2 ratio")
-    ax.set_ylabel("observed median log2 ratio")
+    ax.set_ylabel("observed − expected (log2)")
     ax.set_title(f"DIA LFQ accuracy across the dynamic range ({DATASET})\n"
                  "(A/B, A/C, B/C; o human ^ ecoli s yeast)")
     ax.legend(title="arm")

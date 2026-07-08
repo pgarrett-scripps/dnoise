@@ -136,7 +136,7 @@ def main() -> int:
         "xtick.labelsize": 11, "ytick.labelsize": 11, "legend.fontsize": 9,
     })
     x = np.arange(len(GRADS))
-    lim = (-3.5, 4.0)
+    xlim = (-3.5, 4.0)
 
     for ri, (row_title, ds_prefix, uses_dia_csv) in enumerate(ROWS):
         metrics, acc = load_row_data(ds_prefix, uses_dia_csv)
@@ -161,16 +161,23 @@ def main() -> int:
         if ri == 0:
             a0.legend(fontsize=8, loc="upper left")
 
-        a2.plot(lim, lim, color="gray", ls="--", lw=1, zorder=0)
+        # Residual (observed - expected) vs expected: ideal line is horizontal
+        # at 0 rather than a 45deg diagonal, so the 5 overlapping arms/levels
+        # separate out far more clearly than an observed-vs-expected view.
+        resid = [pt["observed"] - pt["expected"] for alab in ARMS for glab, _ in GRADS
+                 for pt in acc[(glab, alab)]]
+        pad = max(0.3, 0.15 * (max(resid) - min(resid))) if resid else 0.3
+        ylo, yhi = (min(resid) - pad, max(resid) + pad) if resid else (-1, 1)
+        a2.axhline(0, color="gray", ls="--", lw=1, zorder=0)
         for alab in ARMS:
             for glab, _ in GRADS:
                 for pt in acc[(glab, alab)]:
-                    a2.scatter(pt["expected"], pt["observed"], color=ARM_COLOR[alab],
+                    a2.scatter(pt["expected"], pt["observed"] - pt["expected"], color=ARM_COLOR[alab],
                                marker=MARK[pt["species"]], s=40, alpha=0.75)
             a2.scatter([], [], color=ARM_COLOR[alab], label=alab)
-        a2.set_xlim(*lim); a2.set_ylim(*lim)
+        a2.set_xlim(*xlim); a2.set_ylim(ylo, yhi)
         a2.set_xlabel("expected log2 ratio" if ri == n_rows - 1 else "")
-        a2.set_ylabel("observed median log2")
+        a2.set_ylabel("observed − expected (log2)")
         a2.set_title("LFQ accuracy (○ human △ ecoli □ yeast)" if ri == 0 else "")
 
     fig.suptitle("Streak filter vs. a matched strict intensity threshold, "
