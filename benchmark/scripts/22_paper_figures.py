@@ -62,8 +62,21 @@ MARK = {"HUMAN": "o", "YEAST": "s", "ECOLI": "^"}
 
 
 def compression(dsub: str) -> tuple[int, int]:
+    """Sum MS1 points and frame-binary bytes over an arm's 18 .d files. These
+    live under data/<dataset>/<arm>/, which is routinely deleted once an arm's
+    Sage/DIA-NN search completes (storage discipline) -- so an empty glob here
+    usually means the caller needs to rebuild that arm first, NOT that its true
+    compression is zero. Fail loudly rather than silently plotting a 0% bar."""
+    files = sorted((DATA / dsub).glob("*.d"))
+    if not files:
+        raise RuntimeError(
+            f"no .d files in {DATA / dsub} -- this arm's denoised copies were "
+            f"likely deleted after its search completed. Rebuild it first "
+            f"(e.g. `just watershed` / `just box-arm`) before regenerating "
+            f"this figure; do not trust a 0% bar as a real result."
+        )
     ms1 = b = 0
-    for d in sorted((DATA / dsub).glob("*.d")):
+    for d in files:
         a, _, bb = stats(d)
         ms1 += a
         b += bb
@@ -135,12 +148,29 @@ def make_fig(labels: list[str], title: str, out: Path) -> None:
     print(f"wrote {out}")
 
 
+# data .d subdir -> data_reduction.csv column suffix (see 07_data_reduction.py)
+_REDUCTION_CSV_SUFFIX = {"raw": "raw", "denoised": "MS1", "denoised_msms": "MS1+MS/MS"}
+_reduction_cache: dict[str, pd.DataFrame] = {}
+
+
 def compress(dataset: str, dsub: str) -> tuple[int, int]:
-    ms1 = b = 0
-    for d in sorted((ROOT / "data" / dataset / dsub).glob("*.d")):
-        a, _, bb = stats(d)
-        ms1 += a
-        b += bb
+    """Sum MS1 points and frame-binary bytes over an arm's 18 runs, from the
+    permanent per-run results/<dataset>/analysis/data_reduction.csv (written
+    once by 07_data_reduction.py) rather than the live denoised .d files,
+    which are routinely deleted after their search completes (storage
+    discipline) and would otherwise make this silently return 0."""
+    if dataset not in _reduction_cache:
+        csv_path = ROOT / "results" / dataset / "analysis" / "data_reduction.csv"
+        if not csv_path.is_file():
+            raise RuntimeError(
+                f"{csv_path} missing -- run `DATASET={dataset} uv run "
+                f"scripts/07_data_reduction.py` first."
+            )
+        _reduction_cache[dataset] = pd.read_csv(csv_path)
+    df = _reduction_cache[dataset]
+    suffix = _REDUCTION_CSV_SUFFIX[dsub]
+    ms1 = int(df[f"ms1_{suffix}"].sum())
+    b = int(df[f"bytes_{suffix}"].sum())
     return ms1, b
 
 

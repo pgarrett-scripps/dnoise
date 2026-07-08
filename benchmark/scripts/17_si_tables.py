@@ -206,8 +206,16 @@ def centroider_table(out_name: str = "centroider.typ") -> None:
         return
 
     def comp(dsub: str) -> tuple[int, int]:
+        files = sorted((DATA / dsub).glob("*.d"))
+        if not files:
+            raise RuntimeError(
+                f"no .d files in {DATA / dsub} -- this arm's denoised copies were "
+                f"likely deleted after its search completed (storage discipline). "
+                f"Rebuild it first (e.g. `just watershed` / `just box-arm`); do not "
+                f"trust a silently-zero result here."
+            )
         ms1 = b = 0
-        for d in sorted((DATA / dsub).glob("*.d")):
+        for d in files:
             a, _, bb = M.stats(d)
             ms1 += a
             b += bb
