@@ -1,0 +1,24 @@
+# Strict intensity-threshold baseline, MS1+MS2 diaPASEF (control arm for the
+# streak `msms` arm). Both frame types collapsed to a pure per-point threshold
+# (see dnoise.intensity.dia_5min.toml / dnoise.intensity_msms.toml for the
+# rationale). DIA gates: --dia-ms1-window (MS1) + --dia-window (MS2).
+#
+# T1 = 20, T2 = 68 were calibrated by 56_recalib_intensity_dia.py to match
+# the streak `denoised`/`msms` arms' MS1/MS2-point removal on this gradient's
+# REP1 (independently: MS1 and MS2 point counts don't interact).
+
+mz_half_width = 0
+min_feature_length = 1
+max_internal_gap = 0
+min_window_intensity = 20
+min_feature_intensity = 0
+iterations = 1
+halo = false
+denoise_msms = true
+msms_mz_half_width = 0
+msms_min_feature_length = 1
+msms_max_internal_gap = 0
+msms_min_window_intensity = 68
+msms_min_feature_intensity = 0
+msms_iterations = 1
+all_frames = false
