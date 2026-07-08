@@ -3,13 +3,12 @@
 EXHAUSTIVE across both acquisition modes and both denoising levels.
 
 Promotes the intensity-baseline control (SI Section S6) to a main-text figure
-(paper/figures/fig_intensity.png), a 4-row x 3-column grid:
-  row 1: ddaPASEF, MS1-only      (original / streak / threshold)
-  row 2: ddaPASEF, MS1+MS/MS     (original / streak_msms / threshold_msms)
-  row 3: diaPASEF, MS1-only      (original / streak / threshold)
-  row 4: diaPASEF, MS1+MS/MS     (original / streak_msms / threshold_msms)
+(paper/figures/fig_intensity.png), a 2-row x 3-column grid:
+  row 1: ddaPASEF (MS1-only and MS1+MS/MS combined)
+  row 2: diaPASEF (MS1-only and MS1+MS/MS combined)
 Each row: (A) quantified proteins, (B) quantified peptides, (C) LFQ accuracy,
-both gradients grouped within each bar panel.
+both gradients grouped within each bar panel, with 5 arms per gradient group
+(original + {streak, threshold} x {MS1-only, MS1+MS/MS}).
 
 ddaPASEF metrics come from Sage's lfq.tsv (via _metrics.py, two-peptide rule).
 diaPASEF metrics come from DIA-NN's precomputed results/<ds>/analysis/{summary,
@@ -17,12 +16,12 @@ accuracy}.csv (written by 12_analyze_dia.py), which use the identical
 two-peptide, >=2-replicate rule.
 
 Also runs a paired permutation test (sign-flip, pure numpy) on the per-run
-quantified-protein counts (streak vs. intensity, 18 runs per gradient) for the
-two ddaPASEF rows, where per-run data is directly available, and prints the
-observed per-run difference and p-value for citation in the text. diaPASEF
-per-run counts are not extracted here (DIA-NN's per-run breakdown would need
-a separate pr_matrix pass); the figure and SI Table S15 report diaPASEF
-aggregates only.
+quantified-protein counts (streak vs. intensity, 18 runs per gradient) for
+ddaPASEF at both levels, where per-run data is directly available, and prints
+the observed per-run difference and p-value for citation in the text.
+diaPASEF per-run counts are not extracted here (DIA-NN's per-run breakdown
+would need a separate pr_matrix pass); the figure and SI Table S15 report
+diaPASEF aggregates only.
 
 Run: uv run scripts/26_intensity_main_figure.py
 """
@@ -45,19 +44,28 @@ from _metrics import lfq_metrics, lfq_table
 ROOT = Path(__file__).resolve().parents[1]
 FIGS = ROOT.parent / "paper" / "figures"
 MARK = {"HUMAN": "o", "YEAST": "s", "ECOLI": "^"}
-ARM_COLOR = {"original": "#0072B2", "streak filter": "#E69F00", "intensity threshold": "#D55E00"}
 GRADS = [("5 min", "5min"), ("15 min", "15min")]
 
-# (row title, dataset prefix, {display label -> arm subdir}, uses_dia_csv)
+# 5 arms per row: original (shared), streak/threshold at each of the two
+# levels. Colorblind-safe (Wong, Nat. Methods 2011): blue/orange/vermillion
+# for MS1-only (original/streak/threshold), bluish-green/reddish-purple for
+# the MS1+MS/MS streak/threshold pair (matching 12_analyze_dia.py's palette).
+ARMS = ["original", "streak (MS1)", "threshold (MS1)", "streak (MS1+MS/MS)", "threshold (MS1+MS/MS)"]
+ARM_COLOR = {
+    "original": "#0072B2",
+    "streak (MS1)": "#E69F00", "threshold (MS1)": "#D55E00",
+    "streak (MS1+MS/MS)": "#009E73", "threshold (MS1+MS/MS)": "#CC79A7",
+}
+ARM_SUBDIR = {
+    "original": "original",
+    "streak (MS1)": "denoised", "threshold (MS1)": "intensity",
+    "streak (MS1+MS/MS)": "msms", "threshold (MS1+MS/MS)": "intensity_msms",
+}
+
+# (row title, dataset prefix, uses_dia_csv)
 ROWS = [
-    ("ddaPASEF, MS1-only", "dda",
-     {"original": "original", "streak filter": "denoised", "intensity threshold": "intensity"}, False),
-    ("ddaPASEF, MS1+MS/MS", "dda",
-     {"original": "original", "streak filter": "msms", "intensity threshold": "intensity_msms"}, False),
-    ("diaPASEF, MS1-only", "dia",
-     {"original": "original", "streak filter": "denoised", "intensity threshold": "intensity"}, True),
-    ("diaPASEF, MS1+MS/MS", "dia",
-     {"original": "original", "streak filter": "msms", "intensity threshold": "intensity_msms"}, True),
+    ("ddaPASEF", "dda", False),
+    ("diaPASEF", "dia", True),
 ]
 
 
@@ -78,7 +86,7 @@ def paired_perm_p(a, b, iters: int = 100000, seed: int = 0) -> tuple[float, floa
     return obs, float(p)
 
 
-def load_row_data(ds_prefix: str, arm_map: dict, uses_dia_csv: bool):
+def load_row_data(ds_prefix: str, uses_dia_csv: bool):
     """metrics[(grad_label, arm_label)] -> {n_quantified, n_quant_peptide};
     acc[(grad_label, arm_label)] -> list of {expected, observed, species} dicts."""
     metrics, acc = {}, {}
@@ -87,7 +95,8 @@ def load_row_data(ds_prefix: str, arm_map: dict, uses_dia_csv: bool):
         if uses_dia_csv:
             summ = pd.read_csv(ROOT / f"results/{ds}/analysis/summary.csv", index_col=0)
             accdf = pd.read_csv(ROOT / f"results/{ds}/analysis/accuracy.csv")
-            for alab, rsub in arm_map.items():
+            for alab in ARMS:
+                rsub = ARM_SUBDIR[alab]
                 if rsub in summ.index:
                     metrics[(glab, alab)] = {
                         "n_quantified": int(summ.loc[rsub, "n_quantified"]),
@@ -99,64 +108,61 @@ def load_row_data(ds_prefix: str, arm_map: dict, uses_dia_csv: bool):
                 acc[(glab, alab)] = [{"expected": r.expected, "observed": r.observed, "species": r.species}
                                       for r in d.itertuples()]
         else:
-            for alab, rsub in arm_map.items():
+            import _metrics as M
+            for alab in ARMS:
+                rsub = ARM_SUBDIR[alab]
                 d = ROOT / "results" / ds / rsub
                 prot = lfq_table(d)
                 metrics[(glab, alab)] = lfq_metrics(prot, d)
-                import _metrics as M
-                acc[(glab, alab)] = M.pair_accuracy(alab, d)
+                acc[(glab, alab)] = M.pair_accuracy(rsub, d)
     return metrics, acc
 
 
 def main() -> int:
     print("Paired permutation test (per-run quantified proteins, streak vs intensity), ddaPASEF only:")
-    for row_title, ds_prefix, arm_map, uses_dia_csv in ROWS:
-        if uses_dia_csv:
-            continue
-        streak_sub = arm_map["streak filter"]
-        thresh_sub = arm_map["intensity threshold"]
+    for level, streak_sub, thresh_sub in [("MS1-only", "denoised", "intensity"), ("MS1+MS/MS", "msms", "intensity_msms")]:
         for glab, g in GRADS:
-            ds = f"{ds_prefix}_{g}"
+            ds = f"dda_{g}"
             s = perrun_protein_counts(ROOT / "results" / ds / streak_sub)
             i = perrun_protein_counts(ROOT / "results" / ds / thresh_sub)
             obs, p = paired_perm_p(s, i)
-            print(f"  [{row_title}] {glab}: streak mean {s.mean():.1f}, intensity mean {i.mean():.1f}, "
+            print(f"  [{level}] {glab}: streak mean {s.mean():.1f}, intensity mean {i.mean():.1f}, "
                   f"delta={obs:+.1f}/run, n={len(s)} runs, p={p:.2e}")
 
     n_rows = len(ROWS)
-    fig, ax = plt.subplots(n_rows, 3, figsize=(13, 4.1 * n_rows))
+    fig, ax = plt.subplots(n_rows, 3, figsize=(13, 4.6 * n_rows))
     plt.rcParams.update({
         "font.size": 12, "axes.titlesize": 13, "axes.labelsize": 12,
-        "xtick.labelsize": 11, "ytick.labelsize": 11, "legend.fontsize": 10,
+        "xtick.labelsize": 11, "ytick.labelsize": 11, "legend.fontsize": 9,
     })
     x = np.arange(len(GRADS))
     lim = (-3.5, 4.0)
 
-    for ri, (row_title, ds_prefix, arm_map, uses_dia_csv) in enumerate(ROWS):
-        metrics, acc = load_row_data(ds_prefix, arm_map, uses_dia_csv)
-        arms = list(arm_map)
-        w = 0.8 / len(arms)
+    for ri, (row_title, ds_prefix, uses_dia_csv) in enumerate(ROWS):
+        metrics, acc = load_row_data(ds_prefix, uses_dia_csv)
+        w = 0.8 / len(ARMS)
 
         a0, a1, a2 = ax[ri, 0], ax[ri, 1], ax[ri, 2]
-        for j, alab in enumerate(arms):
-            off = (-(len(arms) - 1) / 2 + j) * w
+        for j, alab in enumerate(ARMS):
+            off = (-(len(ARMS) - 1) / 2 + j) * w
             prot_vals = [metrics[(g, alab)]["n_quantified"] for g, _ in GRADS]
             pep_vals = [metrics[(g, alab)]["n_quant_peptide"] for g, _ in GRADS]
             b0 = a0.bar(x + off, prot_vals, w, label=alab, color=ARM_COLOR[alab])
             b1 = a1.bar(x + off, pep_vals, w, label=alab, color=ARM_COLOR[alab])
-            a0.bar_label(b0, fmt="%d", fontsize=7, padding=1)
-            a1.bar_label(b1, fmt="%d", fontsize=7, padding=1)
+            a0.bar_label(b0, fmt="%d", fontsize=6, padding=1, rotation=90)
+            a1.bar_label(b1, fmt="%d", fontsize=6, padding=1, rotation=90)
         a0.set_title("Proteins quantified" if ri == 0 else "")
         a1.set_title("Peptides quantified" if ri == 0 else "")
         a0.set_ylabel(f"{row_title}\nproteins (1% FDR, ≥2 pep.)")
         a1.set_ylabel("quantified peptides")
         a0.set_xticks(x); a0.set_xticklabels([g for g, _ in GRADS])
         a1.set_xticks(x); a1.set_xticklabels([g for g, _ in GRADS])
+        a0.margins(y=0.15); a1.margins(y=0.15)
         if ri == 0:
-            a0.legend(fontsize=8)
+            a0.legend(fontsize=8, loc="upper left")
 
         a2.plot(lim, lim, color="gray", ls="--", lw=1, zorder=0)
-        for alab in arms:
+        for alab in ARMS:
             for glab, _ in GRADS:
                 for pt in acc[(glab, alab)]:
                     a2.scatter(pt["expected"], pt["observed"], color=ARM_COLOR[alab],
