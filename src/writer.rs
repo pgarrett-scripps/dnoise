@@ -3,6 +3,7 @@
 
 use crate::box_centroid::box_centroid;
 use crate::codec::encode_frame_type2;
+use crate::crop::CropGate;
 use crate::dia_ms1::{DiaMs1Gate, TofScanBox};
 use crate::dia_window::{filter_per_window, in_window_mask};
 use crate::error::{DnoiseError, Result};
@@ -11,7 +12,8 @@ use crate::frame::FlatFrame;
 use crate::halo::horizontal_halo_keep_mask;
 use crate::msms::{MsmsKeep, build_msms_keep};
 use crate::params::{
-    DiaMs1WindowParams, FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, Stages,
+    CropParams, DiaMs1WindowParams, FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams,
+    Stages,
 };
 use crate::polygon::PolygonGate;
 use crate::smooth::box_average;
@@ -24,7 +26,7 @@ use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use timsrust::converters::ConvertableDomain;
 use timsrust::readers::{FrameReader, MetadataReader};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Frames are read+filtered+encoded in parallel batches of this size, then the
 /// batch is written sequentially (so offsets stay ordered) before the next.
@@ -36,15 +38,34 @@ const CHUNK: usize = 2048;
 const MAX_CENTROIDS: usize = 100_000;
 
 /// Summary returned by [`denoise`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct DenoiseStats {
-    /// Total frames processed (MS1 + MS/MS + empty).
+    /// Total frames in the run (MS1 + MS/MS + empty).
     pub frames: usize,
-    /// Total input points across all frames.
+    /// MS1 frames.
+    pub ms1_frames: usize,
+    /// MS/MS frames.
+    pub msms_frames: usize,
+    /// Frames emptied by the retention-time crop (subset of `frames`).
+    pub cropped_frames: usize,
+    /// Frames actually processed. Equals `frames` unless a dry-run `sample` was
+    /// requested, in which case it is the sampled subset.
+    pub processed_frames: usize,
+    /// Total input points across all processed frames.
     pub raw_points: u64,
-    /// Total points written after filtering.
+    /// Total points kept after filtering + crop.
     pub kept_points: u64,
+    /// Input points in MS1 frames only.
+    pub raw_ms1_points: u64,
+    /// Kept points in MS1 frames only.
+    pub kept_ms1_points: u64,
+    /// Summed intensity of all input points (processed frames).
+    pub raw_summed_intensity: u64,
+    /// Summed intensity of all kept points.
+    pub kept_summed_intensity: u64,
+    /// True when this was a dry run (no output written).
+    pub dry_run: bool,
 }
 
 /// Progress update passed to the callback of [`denoise_with_progress`].
@@ -57,6 +78,52 @@ pub struct Progress {
     pub frames_total: usize,
 }
 
+/// Dry-run frame sampling: process only a pseudo-random subset of frames to
+/// estimate the data reduction quickly, without touching output. Selection is
+/// deterministic in `seed`, so a run is reproducible and comparable across
+/// parameter sweeps.
+#[derive(Debug, Clone, Copy)]
+pub struct SampleSpec {
+    /// Fraction of frames to process, in `(0, 1]`.
+    pub fraction: f64,
+    /// Seed for the deterministic frame selector.
+    pub seed: u64,
+}
+
+/// Run-level options orthogonal to the filter itself: overwrite behaviour, the
+/// region-of-interest crop, crop-only mode, and dry-run / sampling. Bundled so the
+/// `denoise*` entry points stay to a few arguments.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RunOptions<'a> {
+    /// Overwrite an existing `output` folder.
+    pub force: bool,
+    /// Compute statistics without writing any output `.d`.
+    pub dry_run: bool,
+    /// Region-of-interest crop applied to every frame (`None` = no crop).
+    pub crop: Option<&'a CropParams>,
+    /// Skip all denoising (vertical filter, halo, gates, centroiders) and only
+    /// apply the crop — carve a subset `.d` without altering retained signal.
+    /// Requires `crop` to be set; ignored otherwise.
+    pub crop_only: bool,
+    /// Dry-run frame sampling for a fast reduction estimate (`None` = all frames).
+    /// Only honoured together with `dry_run`.
+    pub sample: Option<SampleSpec>,
+}
+
+/// Deterministic per-frame selector for dry-run sampling: hash `(seed, index)`
+/// with SplitMix64 and keep the frame when the hash falls below `fraction` of the
+/// u64 range. Order-independent, so any frame subset is reproducible from the seed.
+fn frame_sampled(index: usize, seed: u64, fraction: f64) -> bool {
+    let mut z = seed
+        .wrapping_add(index as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let threshold = (fraction.clamp(0.0, 1.0) * u64::MAX as f64) as u64;
+    z <= threshold
+}
+
 /// Denoise `input` (.d) into a new `output` (.d).
 ///
 /// The core vertical-IM filter ([`FilterParams`]) runs on MS1 frames; `stages`
@@ -66,7 +133,8 @@ pub struct Progress {
 /// existing `output`.
 ///
 /// This reports no progress; use [`denoise_with_progress`] to receive
-/// [`Progress`] updates as frames are written.
+/// [`Progress`] updates as frames are written. For the crop, crop-only, and
+/// dry-run options use [`denoise_with_options`].
 pub fn denoise(
     input: &Path,
     output: &Path,
@@ -74,7 +142,25 @@ pub fn denoise(
     stages: &Stages,
     force: bool,
 ) -> Result<DenoiseStats> {
-    denoise_with_progress(input, output, params, stages, force, |_| {})
+    let opts = RunOptions {
+        force,
+        ..RunOptions::default()
+    };
+    denoise_with_options(input, output, params, stages, &opts, |_| {})
+}
+
+/// Like [`denoise`] but takes a full [`RunOptions`] (crop, crop-only, dry-run,
+/// sampling) and a progress callback. This is the most general entry point; the
+/// others are thin wrappers over it.
+pub fn denoise_with_options<F: FnMut(Progress)>(
+    input: &Path,
+    output: &Path,
+    params: &FilterParams,
+    stages: &Stages,
+    options: &RunOptions,
+    progress: F,
+) -> Result<DenoiseStats> {
+    run(input, output, params, stages, options, progress)
 }
 
 /// Like [`denoise`], but invokes `progress` once before processing and again
@@ -86,8 +172,34 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     params: &FilterParams,
     stages: &Stages,
     force: bool,
+    progress: F,
+) -> Result<DenoiseStats> {
+    let opts = RunOptions {
+        force,
+        ..RunOptions::default()
+    };
+    run(input, output, params, stages, &opts, progress)
+}
+
+/// The full pipeline behind every public entry point. Reads the input `.d`, builds
+/// the per-run gates (including the crop), filters + crops each frame in parallel
+/// chunks, and — unless `options.dry_run` — writes the rewritten `analysis.tdf_bin`
+/// and fixes up `analysis.tdf`.
+fn run<F: FnMut(Progress)>(
+    input: &Path,
+    output: &Path,
+    params: &FilterParams,
+    stages: &Stages,
+    options: &RunOptions,
     mut progress: F,
 ) -> Result<DenoiseStats> {
+    let &RunOptions {
+        force,
+        dry_run,
+        crop,
+        crop_only,
+        sample,
+    } = options;
     // Unpack the stages this function builds gates from; the per-frame stages
     // (smoothing, centroiding, etc.) are forwarded to `process_frame` via `stages`.
     let &Stages {
@@ -105,17 +217,19 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     if !in_tdf.is_file() || !in_bin.is_file() {
         return Err(DnoiseError::NotADotD(input.to_path_buf()));
     }
-    if output.exists() {
-        if force {
-            fs::remove_dir_all(output)?;
-        } else {
-            return Err(DnoiseError::OutputExists(output.to_path_buf()));
+    // A dry run never writes, so the output folder is left completely untouched.
+    if !dry_run {
+        if output.exists() {
+            if force {
+                fs::remove_dir_all(output)?;
+            } else {
+                return Err(DnoiseError::OutputExists(output.to_path_buf()));
+            }
         }
+        // Copy everything except the binary (we regenerate that), so
+        // calibration.sqlite, analysis.tdf, etc. come along.
+        copy_dir_except(input, output, "analysis.tdf_bin")?;
     }
-
-    // Copy everything except the binary (we regenerate that), so calibration.sqlite,
-    // analysis.tdf, etc. come along.
-    copy_dir_except(input, output, "analysis.tdf_bin")?;
 
     let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
     let n_frames = reader.len();
@@ -230,73 +344,162 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     }
     let polygon_ref = polygon_gate.as_ref();
 
-    let out_bin = output.join("analysis.tdf_bin");
-    let mut bin = BufWriter::new(fs::File::create(&out_bin)?);
+    // Region-of-interest crop: convert the physical `(m/z, 1/K0)` bounds to integer
+    // `(TOF, scan)` once via the run calibration (RT bounds are applied per frame
+    // below). Applies to every frame — this is a subset of the acquisition, not a
+    // signal/noise decision. `None` when no crop is requested or it is RT-only.
+    let crop_gate = match crop {
+        Some(cp) if !cp.is_empty() => {
+            let md =
+                MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
+            let num_scans = meta.iter().map(|m| m.num_scans).max().unwrap_or(0);
+            let g = CropGate::build(
+                cp,
+                num_scans,
+                |mz| md.mz_converter.invert(mz),
+                |k0| md.im_converter.invert(k0),
+            );
+            info!(
+                point_crop = g.is_active(),
+                rt_crop = cp.has_rt(),
+                crop_only,
+                "crop: region-of-interest gate built"
+            );
+            g.is_active().then_some(g)
+        }
+        _ => None,
+    };
+    let crop_ref = crop_gate.as_ref();
+
+    // Per-frame retention-time keep mask (crop bounds are in minutes; `Frames.Time`
+    // is in seconds). Frames outside the window are emitted empty rather than
+    // deleted, so the frame axis stays valid. All-true when no RT bound is set.
+    let rt_keep: Vec<bool> = match crop {
+        Some(cp) if cp.has_rt() => {
+            let lo = cp.rt_min.map(|m| m * 60.0).unwrap_or(f64::NEG_INFINITY);
+            let hi = cp.rt_max.map(|m| m * 60.0).unwrap_or(f64::INFINITY);
+            meta.iter().map(|m| m.rt >= lo && m.rt <= hi).collect()
+        }
+        _ => vec![true; n_frames],
+    };
+
+    // Frames to process. In a dry run with `sample` set, this is a deterministic
+    // pseudo-random subset (for a fast reduction estimate); otherwise every frame,
+    // in order (so the sequential offsets written below stay consistent).
+    let selected: Vec<usize> = match sample {
+        Some(s) if dry_run => (0..n_frames)
+            .filter(|&i| frame_sampled(i, s.seed, s.fraction))
+            .collect(),
+        _ => (0..n_frames).collect(),
+    };
+    match sample {
+        Some(_) if !dry_run => {
+            warn!("--sample ignored without --dry-run (a real run must process every frame)")
+        }
+        Some(s) => info!(
+            sampled = selected.len(),
+            total = n_frames,
+            fraction = s.fraction,
+            "dry-run: processing a frame sample"
+        ),
+        None => {}
+    }
+    let n_process = selected.len();
 
     // Preserve the leading header that precedes the first frame (Bruker reserves a
     // block at the start of the .tdf_bin), and start writing frames after it so the
-    // new TimsId offsets land in the same layout the Bruker reader expects.
+    // new TimsId offsets land in the same layout the Bruker reader expects. A dry
+    // run opens no output file.
     let header_len = tdf::binary_header_len(&in_tdf)?;
-    if header_len > 0 {
-        let mut header = vec![0u8; header_len as usize];
-        fs::File::open(&in_bin).and_then(|mut f| f.read_exact(&mut header))?;
-        bin.write_all(&header)?;
-    }
+    let mut bin = if dry_run {
+        None
+    } else {
+        let mut b = BufWriter::new(fs::File::create(output.join("analysis.tdf_bin"))?);
+        if header_len > 0 {
+            let mut header = vec![0u8; header_len as usize];
+            fs::File::open(&in_bin).and_then(|mut f| f.read_exact(&mut header))?;
+            b.write_all(&header)?;
+        }
+        Some(b)
+    };
 
     progress(Progress {
         frames_done: 0,
-        frames_total: n_frames,
+        frames_total: n_process,
     });
 
     // Per-run context shared by every frame: the prebuilt MS/MS keep sets and
-    // gates derived above, plus the MS1-stream index maps. Bundling these keeps
-    // `process_frame` to a handful of arguments.
+    // gates derived above, the crop, plus the MS1-stream index maps. Bundling these
+    // keeps `process_frame` to a handful of arguments.
     let ctx = FrameCtx {
         msms: msms_ref,
         dia_msms,
         dia_windows: dia_windows_ref,
         dia_ms1: dia_ms1_ref,
         polygon: polygon_ref,
+        crop: crop_ref,
+        crop_only,
+        rt_keep: &rt_keep,
         ms1_indices: &ms1_indices,
         ms1_pos: &ms1_pos,
     };
 
     let mut offset: u64 = header_len;
-    let mut updates: Vec<FrameUpdate> = Vec::with_capacity(n_frames);
+    let mut updates: Vec<FrameUpdate> = Vec::with_capacity(n_process);
     let mut raw_points: u64 = 0;
     let mut kept_points: u64 = 0;
+    let mut raw_ms1: u64 = 0;
+    let mut kept_ms1: u64 = 0;
+    let mut raw_summed: u64 = 0;
+    let mut kept_summed: u64 = 0;
+    let mut cropped_frames: usize = 0;
     let mut frames_done: usize = 0;
 
-    for start in (0..n_frames).step_by(CHUNK) {
-        let end = (start + CHUNK).min(n_frames);
-        let processed: Vec<ProcessedFrame> = (start..end)
-            .into_par_iter()
-            .map(|i| process_frame(&reader, &meta, i, params, stages, &ctx))
+    for chunk in selected.chunks(CHUNK) {
+        let processed: Vec<ProcessedFrame> = chunk
+            .par_iter()
+            .map(|&i| process_frame(&reader, &meta, i, params, stages, &ctx))
             .collect::<Result<_>>()?;
 
         for pf in processed {
             raw_points += pf.raw_points;
             kept_points += pf.num_peaks;
-            bin.write_all(&pf.record)?;
-            updates.push(FrameUpdate {
-                frame_id: pf.frame_id,
-                tims_id: offset,
-                num_peaks: pf.num_peaks,
-                max_intensity: pf.max_intensity,
-                summed_intensities: pf.summed_intensities,
-            });
-            offset += pf.record.len() as u64;
+            raw_summed += pf.raw_summed;
+            kept_summed += pf.summed_intensities;
+            if pf.is_ms1 {
+                raw_ms1 += pf.raw_points;
+                kept_ms1 += pf.num_peaks;
+            }
+            if pf.cropped {
+                cropped_frames += 1;
+            }
+            if let Some(b) = bin.as_mut() {
+                b.write_all(&pf.record)?;
+                updates.push(FrameUpdate {
+                    frame_id: pf.frame_id,
+                    tims_id: offset,
+                    num_peaks: pf.num_peaks,
+                    max_intensity: pf.max_intensity,
+                    summed_intensities: pf.summed_intensities,
+                });
+                offset += pf.record.len() as u64;
+            }
             frames_done += 1;
             progress(Progress {
                 frames_done,
-                frames_total: n_frames,
+                frames_total: n_process,
             });
         }
     }
-    bin.flush()?;
+    if let Some(b) = bin.as_mut() {
+        b.flush()?;
+    }
     drop(bin);
 
-    tdf::update_metadata(&output.join("analysis.tdf"), &updates)?;
+    // Only a real run rewrites the database (offsets, peak counts, compression type).
+    if !dry_run {
+        tdf::update_metadata(&output.join("analysis.tdf"), &updates)?;
+    }
 
     let kept_pct = if raw_points > 0 {
         // Round to 2 decimals so the log field is readable (e.g. 36.64, not
@@ -306,7 +509,8 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         0.0
     };
     info!(
-        frames = n_frames,
+        dry_run,
+        processed_frames = n_process,
         raw_points,
         kept_points,
         kept_pct,
@@ -315,8 +519,17 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
 
     Ok(DenoiseStats {
         frames: n_frames,
+        ms1_frames: n_ms1,
+        msms_frames: n_frames - n_ms1,
+        cropped_frames,
+        processed_frames: n_process,
         raw_points,
         kept_points,
+        raw_ms1_points: raw_ms1,
+        kept_ms1_points: kept_ms1,
+        raw_summed_intensity: raw_summed,
+        kept_summed_intensity: kept_summed,
+        dry_run,
     })
 }
 
@@ -327,10 +540,16 @@ struct ProcessedFrame {
     num_peaks: u64,
     max_intensity: u32,
     summed_intensities: u64,
+    /// Summed intensity of the frame's input points (before filtering/crop).
+    raw_summed: u64,
+    /// Whether this is an MS1 frame (for the per-level stat split).
+    is_ms1: bool,
+    /// Whether this frame was emptied by the retention-time crop.
+    cropped: bool,
 }
 
 /// Per-run context for [`process_frame`]: the MS/MS keep sets and gates built
-/// once in [`denoise_with_progress`], plus the MS1-stream index maps. Lets the
+/// once in [`run`], plus the crop and the MS1-stream index maps. Lets the
 /// per-frame worker take the run's derived state as a single value.
 struct FrameCtx<'a> {
     /// ddaPASEF per-precursor keep sets (`None` unless MS/MS denoising on ddaPASEF).
@@ -343,6 +562,12 @@ struct FrameCtx<'a> {
     dia_ms1: Option<&'a DiaMs1Gate>,
     /// Built MS1 selection-polygon gate (`None` when disabled or no polygon).
     polygon: Option<&'a PolygonGate>,
+    /// Built region-of-interest crop (`None` when no point-level crop is requested).
+    crop: Option<&'a CropGate>,
+    /// Skip all denoising and apply only the crop.
+    crop_only: bool,
+    /// Per-frame retention-time keep mask (`false` = emit this frame empty).
+    rt_keep: &'a [bool],
     /// MS1-stream position -> global frame index (running-average pre-filter).
     ms1_indices: &'a [usize],
     /// Global frame index -> MS1-stream position (`None` for MS/MS frames).
@@ -376,10 +601,14 @@ fn process_frame(
         dia_windows,
         dia_ms1,
         polygon,
+        crop,
+        crop_only,
+        rt_keep,
         ms1_indices,
         ms1_pos,
     } = ctx;
     let meta_i = &meta[i];
+    let is_ms1 = meta_i.is_ms1();
     // Empty frames: timsrust cannot decode their absent payload, so emit the
     // canonical empty record directly (Bruker stores these too).
     if meta_i.num_peaks == 0 {
@@ -390,6 +619,26 @@ fn process_frame(
             num_peaks: 0,
             max_intensity: 0,
             summed_intensities: 0,
+            raw_summed: 0,
+            is_ms1,
+            cropped: false,
+        });
+    }
+
+    // Retention-time crop: a frame outside the window is emitted empty without
+    // decoding its payload. Its input points still count toward the raw total (from
+    // `NumPeaks`) so the reported reduction reflects the crop.
+    if !rt_keep[i] {
+        return Ok(ProcessedFrame {
+            frame_id: meta_i.id,
+            record: crate::codec::encode_empty_frame_type2(meta_i.num_scans),
+            raw_points: meta_i.num_peaks,
+            num_peaks: 0,
+            max_intensity: 0,
+            summed_intensities: 0,
+            raw_summed: 0,
+            is_ms1,
+            cropped: true,
         });
     }
 
@@ -399,6 +648,7 @@ fn process_frame(
     })?;
     let flat = FlatFrame::from_frame(&frame);
     let raw_points = flat.len() as u64;
+    let raw_summed: u64 = flat.intensity.iter().map(|&it| it as u64).sum();
     let num_scans = flat.num_scans;
     let frame_id = flat.frame_id;
 
@@ -444,7 +694,11 @@ fn process_frame(
     // MS1 frames: vertical filter then (optional) horizontal-halo on the survivors.
     // MS/MS frames: pruned by the precursor keep sets when MS/MS denoising is on,
     // otherwise re-encoded unchanged (or vertical-filtered if `filter_all_frames`).
-    let mut keep = if meta_i.is_ms1() {
+    // In `crop_only` mode no denoising runs at all — every point survives to the
+    // crop below, which is the sole filter.
+    let mut keep = if crop_only {
+        vec![true; to_filter.len()]
+    } else if meta_i.is_ms1() {
         let mut keep = if let Some(keys) = &neighborhood_keys {
             // Prune native points by the combined-spectrum decision (mirrors MS/MS).
             (0..to_filter.len())
@@ -517,12 +771,22 @@ fn process_frame(
     // isolation window for this frame. Independent of the streak filter, so it
     // also trims mobility-edge noise when no MS/MS filtering runs. (Per-window
     // filtering already excludes these points, making this a no-op there.)
-    if let (Some(dp), Some(iv)) = (dia_window, dia_iv) {
-        let mask = in_window_mask(&to_filter.scan, iv, dp.scan_pad);
-        for (slot, keep_pt) in keep.iter_mut().zip(mask) {
-            *slot &= keep_pt;
+    if !crop_only {
+        if let (Some(dp), Some(iv)) = (dia_window, dia_iv) {
+            let mask = in_window_mask(&to_filter.scan, iv, dp.scan_pad);
+            for (slot, keep_pt) in keep.iter_mut().zip(mask) {
+                *slot &= keep_pt;
+            }
         }
     }
+
+    // Region-of-interest crop: AND the `(m/z, 1/K0, intensity)` box into the keep
+    // mask. Applies to every frame regardless of MS level (a subset of the raw
+    // acquisition), and is the only active filter under `crop_only`.
+    if let Some(cg) = crop {
+        cg.apply(&to_filter.scan, &to_filter.tof, &to_filter.intensity, &mut keep);
+    }
+
     let survivors = to_filter.survivors(&keep);
 
     // Optional intensity smoothing then watershed centroiding, both applied only
@@ -530,8 +794,8 @@ fn process_frame(
     // under `filter_all_frames` (and never on the separate per-precursor MS/MS-
     // denoise path, which has its own keep logic). Smoothing runs first so the
     // watershed seeds on the stabilised intensities.
-    let filtered_here =
-        meta_i.is_ms1() || dia_msms.is_some() || (msms.is_none() && filter_all_frames);
+    let filtered_here = !crop_only
+        && (meta_i.is_ms1() || dia_msms.is_some() || (msms.is_none() && filter_all_frames));
     let survivors = match smooth {
         Some(sp) if filtered_here => box_average(&survivors, num_scans, sp),
         _ => survivors,
@@ -560,6 +824,9 @@ fn process_frame(
         num_peaks,
         max_intensity,
         summed_intensities,
+        raw_summed,
+        is_ms1,
+        cropped: false,
     })
 }
 

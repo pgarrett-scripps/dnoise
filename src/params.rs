@@ -246,6 +246,48 @@ impl MsmsFilterParams {
     }
 }
 
+/// Physical-unit bounds for the region-of-interest crop ([`crate::crop`]). Every
+/// field is optional; an unset bound leaves that side of the axis unconstrained.
+/// The crop is a subset of the raw acquisition (not a denoising decision) and, when
+/// set, applies to *all* frames (MS1 and MS/MS alike) so a user can carve a smaller
+/// `.d` out of a large one. m/z and mobility bounds become integer `(TOF, scan)`
+/// ranges via the run calibration; retention time is compared per frame and an
+/// out-of-window frame is emitted empty (never deleted), keeping the frame axis and
+/// every table that references it valid.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CropParams {
+    /// Lower m/z bound (Da), inclusive. `None` = no lower m/z limit.
+    pub mz_min: Option<f64>,
+    /// Upper m/z bound (Da), inclusive. `None` = no upper m/z limit.
+    pub mz_max: Option<f64>,
+    /// Lower ion-mobility bound (`1/K0`), inclusive. `None` = no lower limit.
+    pub im_min: Option<f64>,
+    /// Upper ion-mobility bound (`1/K0`), inclusive. `None` = no upper limit.
+    pub im_max: Option<f64>,
+    /// Lower retention-time bound (**minutes**), inclusive. Frames before this are
+    /// emitted empty. `None` = no lower RT limit.
+    pub rt_min: Option<f64>,
+    /// Upper retention-time bound (**minutes**), inclusive. Frames after this are
+    /// emitted empty. `None` = no upper RT limit.
+    pub rt_max: Option<f64>,
+    /// Minimum per-point intensity, inclusive. `None` = no floor.
+    pub min_intensity: Option<u32>,
+    /// Maximum per-point intensity, inclusive. `None` = no ceiling.
+    pub max_intensity: Option<u32>,
+}
+
+impl CropParams {
+    /// True when no bound is set (the crop would be a no-op).
+    pub fn is_empty(&self) -> bool {
+        *self == CropParams::default()
+    }
+
+    /// True when a retention-time bound is set (frame-level crop).
+    pub fn has_rt(&self) -> bool {
+        self.rt_min.is_some() || self.rt_max.is_some()
+    }
+}
+
 /// Optional pipeline stages layered on top of the core vertical-IM filter
 /// ([`FilterParams`]), passed as one value to [`crate::denoise`] and
 /// [`crate::denoise_with_progress`] instead of a dozen positional arguments.

@@ -73,6 +73,18 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 | `--dia-ms1-im-pad` | 0.05 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window. |
 | `--frame-half-width` | 0 | **Experimental.** Pre-average each MS1 frame over its `2r+1` MS1-frame neighborhood before filtering (see below). |
 | `--all-frames` | off | Also filter MS/MS frames (default: MS1 only). |
+| `--preset` | `none` | Bundle of MS1 gates for the acquisition scheme: `auto` detects ddaPASEF/diaPASEF and enables the matching gate(s), `dda` = selection-polygon, `dia` = isolation-window gates, `none` = nothing. Explicit gate flags still win (see below). |
+| `--mz-ppm` | — | Set the vertical filter's m/z window from a mass tolerance in ppm (converted at a reference m/z) instead of raw TOF indices; overrides `--mz-half-width` (see below). |
+| `--mz-ppm-ref` | acq midpoint | Reference m/z (Da) for `--mz-ppm`. |
+| `--mz-min` / `--mz-max` | — | **Crop.** Keep only points in this m/z band (Da). |
+| `--im-min` / `--im-max` | — | **Crop.** Keep only points in this ion-mobility band (1/K0). |
+| `--rt-min` / `--rt-max` | — | **Crop.** Keep only frames in this retention-time window (**minutes**); out-of-window frames are emitted empty (see below). |
+| `--min-intensity` / `--max-intensity` | — | **Crop.** Keep only points in this intensity range. |
+| `--crop-only` | off | Apply only the crop and skip all denoising, so the output is a raw subset of the input (see below). |
+| `--dry-run` | off | Estimate the reduction without writing any output (see below). |
+| `--sample` | — | With `--dry-run`, process only this fraction (`0 < f ≤ 1`) of frames, chosen deterministically, for a fast estimate. |
+| `--sample-seed` | 0 | Seed for `--sample` frame selection. |
+| `--report` | — | Write a JSON run report (effective config + reduction stats) to this file. |
 | `--threads` | all cores | Worker threads. |
 | `--config` / `-c` | — | Load parameters from a TOML file (see below). |
 | `--force` | off | Overwrite an existing output folder. |
@@ -80,6 +92,45 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 
 Filtering runs in parallel across frames (rayon); frames are written in order
 so binary offsets stay consistent.
+
+> **Presets & auto-detection (`--preset`).** The right MS1 gate depends on how the
+> run was acquired: ddaPASEF benefits from the selection-polygon gate, diaPASEF from
+> the isolation-window gates. `--preset auto` reads the run's `MsMsType` and enables
+> the matching gate(s) for you (ddaPASEF → `--ms1-polygon`; diaPASEF →
+> `--dia-ms1-window --dia-window`); MS1-only or unrecognised schemes enable nothing.
+> `--preset dda` / `--preset dia` force a bundle regardless of detection. A preset
+> only supplies gate *defaults*: an explicit gate flag (or config value) always wins,
+> and gates that find nothing to act on (e.g. a run with no polygon) are silently
+> skipped as usual.
+
+> **Region-of-interest crop (`--mz-*` / `--im-*` / `--rt-*` / `--*-intensity`).** A
+> crop is a blunt subset of the raw acquisition (not a signal/noise decision): it is
+> how you carve a smaller `.d` out of a large one for sharing, faster downstream
+> searches, or test fixtures. m/z and mobility bounds become integer `(TOF, scan)`
+> ranges via the run calibration and apply to **every** frame (MS1 and MS/MS alike);
+> the intensity range is a per-point floor/ceiling. Retention-time bounds act at the
+> frame level: an out-of-window frame is emitted **empty** rather than deleted, so
+> the frame axis and every table that references it stay valid and Bruker-SDK
+> compatible. The crop composes with the denoiser (applied as an extra filter), or
+> run it alone with `--crop-only` to leave retained signal untouched. Note the crop
+> does not rewrite the acquisition-range metadata (`MzAcqRange…`), which continues to
+> describe what the instrument acquired.
+
+> **Dry runs & reports (`--dry-run`, `--sample`, `--report`).** `--dry-run` runs the
+> full pipeline but writes nothing, printing the reduction so you can tune parameters
+> without producing an output `.d`. Add `--sample 0.1` to process a deterministic 10%
+> of frames for a fast estimate (the ratio is representative; only valid with
+> `--dry-run`). `--report out.json` writes the effective configuration plus the
+> reduction statistics (per-MS-level point counts, summed intensities, cropped-frame
+> count, elapsed time) as JSON, for parameter sweeps or provenance; it works for both
+> real and dry runs.
+
+> **ppm-based m/z window (`--mz-ppm`).** `--mz-half-width` is a constant in TOF
+> indices, but a real peak's width scales with m/z. `--mz-ppm 20` derives the window
+> from a mass tolerance instead, evaluated at a reference m/z (`--mz-ppm-ref`, default
+> the midpoint of the acquired range) via the run calibration. The vertical filter
+> still uses one constant index window, so this sets a physically meaningful width
+> once rather than making the window vary across the mass range.
 
 > **In-place denoising (`--in-place`).** Omit the `OUTPUT` argument and pass
 > `--in-place` to overwrite the input folder. dnoise still never edits the source

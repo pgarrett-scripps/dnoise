@@ -34,6 +34,7 @@
 pub mod average;
 pub mod box_centroid;
 pub mod codec;
+pub mod crop;
 pub mod dia_ms1;
 pub mod dia_window;
 pub mod error;
@@ -53,10 +54,77 @@ mod tdf;
 // High-level pipeline.
 pub use error::{DecodeError, DnoiseError, Result};
 pub use params::{
-    BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
+    BoxCentroidParams, CropParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
     Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
 };
-pub use writer::{DenoiseStats, Progress, denoise, denoise_with_progress};
+pub use writer::{
+    DenoiseStats, Progress, RunOptions, SampleSpec, denoise, denoise_with_options,
+    denoise_with_progress,
+};
+
+// Low-level building blocks.
+pub use crop::CropGate;
+
+use std::path::Path;
+use timsrust::converters::ConvertableDomain;
+use timsrust::readers::MetadataReader;
+
+/// Acquisition scheme of a `.d` run, detected from the `Frames.MsMsType` column.
+/// Drives the `--preset auto` gate selection (see the CLI): ddaPASEF wants the MS1
+/// selection-polygon gate, diaPASEF the isolation-window gates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acquisition {
+    /// ddaPASEF (`MsMsType` 8 present): data-dependent PASEF.
+    DdaPasef,
+    /// diaPASEF (`MsMsType` 9 present): data-independent PASEF.
+    DiaPasef,
+    /// Only MS1 frames — no MS/MS in the run.
+    Ms1Only,
+    /// MS/MS frames present but of an unrecognised `MsMsType`.
+    Unknown,
+}
+
+/// Detect the acquisition scheme of an input `.d` folder by inspecting the frame
+/// table (`MsMsType`): 9 anywhere = diaPASEF, else 8 = ddaPASEF, else MS1-only when
+/// every frame is MS1, else unknown. A cheap SQLite read, no frame decoding.
+pub fn detect_acquisition(input: &Path) -> Result<Acquisition> {
+    let meta = tdf::read_frame_meta(&input.join("analysis.tdf"))?;
+    Ok(if meta.iter().any(|m| m.ms_ms_type == 9) {
+        Acquisition::DiaPasef
+    } else if meta.iter().any(|m| m.ms_ms_type == 8) {
+        Acquisition::DdaPasef
+    } else if meta.iter().all(|m| m.is_ms1()) {
+        Acquisition::Ms1Only
+    } else {
+        Acquisition::Unknown
+    })
+}
+
+/// Convert a mass tolerance in ppm to a TOF-index half-width for the vertical
+/// filter's `mz_half_width`, evaluated at a reference m/z. The timsTOF calibration
+/// maps m/z to a fractional TOF index nonlinearly, so a fixed ppm corresponds to a
+/// different index width across the mass range; the vertical filter uses one
+/// constant index window, so we evaluate the width at `ref_mz` (defaulting to the
+/// midpoint of the acquired m/z range) and round up to at least 1.
+///
+/// `ref_mz`: `Some(mz)` to fix the reference, or `None` to use the acquisition
+/// midpoint (falling back to 800.0 if the range is unavailable).
+pub fn tof_half_width_for_ppm(input: &Path, ppm: f64, ref_mz: Option<f64>) -> Result<u32> {
+    let in_tdf = input.join("analysis.tdf");
+    let md = MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
+    let mz = match ref_mz {
+        Some(m) => m,
+        None => match tdf::read_mz_acq_range(&in_tdf)? {
+            Some((lo, hi)) => 0.5 * (lo + hi),
+            None => 800.0,
+        },
+    };
+    // Half the full ppm span, converted to TOF indices at the reference m/z.
+    let t_center = md.mz_converter.invert(mz);
+    let t_edge = md.mz_converter.invert(mz * (1.0 + ppm * 1e-6));
+    let half = (t_edge - t_center).abs().round() as u32;
+    Ok(half.max(1))
+}
 
 // Low-level building blocks.
 pub use average::running_average;

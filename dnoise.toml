@@ -119,6 +119,31 @@ ms1_polygon_im_pad = 0.0
 # MS1-frame neighborhood before filtering. 0 = off.
 frame_half_width = 0
 
+# --- Region-of-interest crop (all optional; unset = no crop) ---
+# A blunt subset of the raw acquisition applied to EVERY frame (MS1 and MS/MS) —
+# not a denoising step. m/z (Da) and mobility (1/K0) bounds become integer
+# (TOF, scan) ranges via the run calibration; intensity is a per-point range; RT
+# bounds (MINUTES) empty out-of-window frames (never delete them, so the frame axis
+# stays valid). Leave a key commented for no bound on that side. See --crop-only to
+# apply the crop without any denoising.
+# mz_min = 400.0
+# mz_max = 1000.0
+# im_min = 0.7
+# im_max = 1.3
+# rt_min = 5.0
+# rt_max = 60.0
+# min_intensity = 100
+# max_intensity = 65535
+# Apply only the crop and skip all denoising (requires a crop bound above).
+crop_only = false
+
+# --- ppm-based m/z window (optional) ---
+# Derive mz_half_width from a mass tolerance in ppm, evaluated at a reference m/z
+# via the run calibration, instead of a raw TOF-index count; overrides
+# mz_half_width above. Leave commented to use mz_half_width directly.
+# mz_ppm = 20.0
+# mz_ppm_ref = 800.0   # default: midpoint of the acquired m/z range
+
 # --- Operational ---
 # Also filter MS/MS frames (default: MS1 only).
 all_frames = false

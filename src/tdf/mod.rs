@@ -26,6 +26,8 @@ pub struct FrameMeta {
     pub num_peaks: u64,
     /// Bruker `MsMsType`: 0 = MS1, non-zero = MS/MS (8 = ddaPASEF, 9 = diaPASEF).
     pub ms_ms_type: i64,
+    /// Retention time in **seconds** (`Frames.Time`). Used by the RT crop.
+    pub rt: f64,
 }
 
 impl FrameMeta {
@@ -294,20 +296,43 @@ pub fn read_selection_polygon(tdf_path: &Path) -> Result<Option<(Vec<f64>, Vec<f
     Ok(Some((mz, im)))
 }
 
-/// Read `(Id, NumScans, NumPeaks, MsMsType)` for every frame, ordered by `Id`.
+/// Read `(Id, NumScans, NumPeaks, MsMsType, Time)` for every frame, ordered by `Id`.
 pub fn read_frame_meta(tdf_path: &Path) -> Result<Vec<FrameMeta>> {
     let conn = Connection::open(tdf_path)?;
     let mut stmt =
-        conn.prepare("SELECT Id, NumScans, NumPeaks, MsMsType FROM Frames ORDER BY Id")?;
+        conn.prepare("SELECT Id, NumScans, NumPeaks, MsMsType, Time FROM Frames ORDER BY Id")?;
     let rows = stmt.query_map([], |r| {
         Ok(FrameMeta {
             id: r.get::<_, i64>(0)? as usize,
             num_scans: r.get::<_, i64>(1)? as usize,
             num_peaks: r.get::<_, i64>(2)? as u64,
             ms_ms_type: r.get::<_, i64>(3)?,
+            rt: r.get::<_, f64>(4)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<_, rusqlite::Error>>()?)
+}
+
+/// Read the acquired m/z range `(lower, upper)` from `GlobalMetadata`
+/// (`MzAcqRangeLower` / `MzAcqRangeUpper`). Used to pick a reference m/z for the
+/// ppm-to-TOF-index conversion. Returns `None` if either key is absent or
+/// unparseable.
+pub fn read_mz_acq_range(tdf_path: &Path) -> Result<Option<(f64, f64)>> {
+    let conn = Connection::open(tdf_path)?;
+    let val = |key: &str| -> Result<Option<f64>> {
+        Ok(conn
+            .query_row(
+                "SELECT Value FROM GlobalMetadata WHERE Key=?1",
+                [key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|s| s.trim().parse::<f64>().ok()))
+    };
+    match (val("MzAcqRangeLower")?, val("MzAcqRangeUpper")?) {
+        (Some(lo), Some(hi)) if hi > lo => Ok(Some((lo, hi))),
+        _ => Ok(None),
+    }
 }
 
 /// Per-frame values written back to the `Frames` table after filtering.

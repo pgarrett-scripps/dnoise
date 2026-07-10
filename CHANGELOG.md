@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Region-of-interest crop / trim** (`crop` module, `CropParams`, `CropGate`):
+  keep only points inside an axis-aligned `(m/z, 1/K0, intensity)` box plus a
+  retention-time window, to carve a smaller `.d` out of a large one. CLI:
+  `--mz-min`/`--mz-max` (Da), `--im-min`/`--im-max` (1/K0),
+  `--min-intensity`/`--max-intensity`, and `--rt-min`/`--rt-max` (minutes). m/z and
+  mobility become integer `(TOF, scan)` ranges via the run calibration and apply to
+  every frame; RT bounds empty out-of-window frames (never deleted, so the frame
+  axis and dependent tables stay valid and SDK-compatible). Composes with the
+  denoiser, or run `--crop-only` to apply just the crop with no denoising.
+- **Named presets & acquisition auto-detection** (`Acquisition`,
+  `detect_acquisition`): `--preset auto` reads the run's `MsMsType` and enables the
+  MS1 gate(s) matched to the scheme (ddaPASEF → selection-polygon; diaPASEF →
+  isolation-window gates); `--preset dda`/`--preset dia` force a bundle. Presets
+  supply gate defaults only; explicit gate flags and config values still win.
+- **Dry runs, sampling & JSON reports**: `--dry-run` runs the full pipeline and
+  reports the reduction without writing any output; `--sample <f>` (dry-run only)
+  processes a deterministic fraction of frames for a fast estimate
+  (`--sample-seed`); `--report <FILE>` writes the effective config plus per-MS-level
+  reduction statistics as JSON. Library: `denoise_with_options`, `RunOptions`,
+  `SampleSpec`, and a widened `DenoiseStats` (per-level point counts, summed
+  intensities, cropped/processed-frame counts, `dry_run`).
+- **ppm-based m/z window** (`tof_half_width_for_ppm`): `--mz-ppm <ppm>` derives the
+  vertical filter's TOF-index half-width from a mass tolerance at a reference m/z
+  (`--mz-ppm-ref`, default the acquired-range midpoint), overriding
+  `--mz-half-width`.
 - **diaPASEF isolation-window MS/MS filtering** (`dia_window` module,
   `DiaWindowParams`, `in_window_mask`, `filter_per_window`; `tdf::read_dia_windows`
   joining `DiaFrameMsMsInfo` + `DiaFrameMsMsWindows`). Two opt-in, diaPASEF-only

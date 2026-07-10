@@ -1,10 +1,11 @@
 //! dnoise CLI.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use dnoise::{
-    BoxCentroidParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
-    Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
+    Acquisition, BoxCentroidParams, CropParams, DiaMs1WindowParams, DiaWindowParams, FilterParams,
+    HaloParams, Ms1PolygonParams, MsmsFilterParams, RunOptions, SampleSpec, SmoothParams, Stages,
+    WatershedParams,
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::Deserialize;
@@ -188,6 +189,68 @@ struct Cli {
     /// vertical-IM filter is MS1-specific and strips most MS/MS fragment signal).
     #[arg(long)]
     all_frames: bool,
+
+    /// Preset bundle of MS1 gates matched to the acquisition scheme. `auto` detects
+    /// ddaPASEF vs diaPASEF and enables the matching gate(s); `dda` forces the
+    /// selection-polygon gate; `dia` forces the isolation-window gates; `none`
+    /// (default) enables nothing. Explicit gate flags still override the preset.
+    #[arg(long, value_enum, default_value_t = Preset::None)]
+    preset: Preset,
+
+    /// Crop: keep only points at or above this m/z (Da). Applies to all frames.
+    #[arg(long, value_name = "MZ")]
+    mz_min: Option<f64>,
+    /// Crop: keep only points at or below this m/z (Da). Applies to all frames.
+    #[arg(long, value_name = "MZ")]
+    mz_max: Option<f64>,
+    /// Crop: keep only points at or above this ion mobility (1/K0).
+    #[arg(long, value_name = "K0")]
+    im_min: Option<f64>,
+    /// Crop: keep only points at or below this ion mobility (1/K0).
+    #[arg(long, value_name = "K0")]
+    im_max: Option<f64>,
+    /// Crop: keep only frames at or after this retention time (minutes); earlier
+    /// frames are emitted empty (never deleted, so the frame axis stays valid).
+    #[arg(long, value_name = "MIN")]
+    rt_min: Option<f64>,
+    /// Crop: keep only frames at or before this retention time (minutes).
+    #[arg(long, value_name = "MIN")]
+    rt_max: Option<f64>,
+    /// Crop: drop points below this intensity.
+    #[arg(long, value_name = "N")]
+    min_intensity: Option<u32>,
+    /// Crop: drop points above this intensity.
+    #[arg(long, value_name = "N")]
+    max_intensity: Option<u32>,
+    /// Apply only the crop (--mz-*/--im-*/--rt-*/--*-intensity) and skip all
+    /// denoising, so the output is a raw subset of the input. Requires a crop bound.
+    #[arg(long)]
+    crop_only: bool,
+
+    /// Set the vertical filter's m/z window from a mass tolerance in ppm rather than
+    /// raw TOF indices, converted at a reference m/z via the run calibration.
+    /// Overrides --mz-half-width when set.
+    #[arg(long, value_name = "PPM")]
+    mz_ppm: Option<f64>,
+    /// Reference m/z (Da) for --mz-ppm. Default: midpoint of the acquired m/z range.
+    #[arg(long, value_name = "MZ")]
+    mz_ppm_ref: Option<f64>,
+
+    /// Estimate the reduction without writing any output: prints the stats (and the
+    /// --report JSON if given) and leaves the output folder untouched.
+    #[arg(long)]
+    dry_run: bool,
+    /// With --dry-run, process only this fraction (0 < f <= 1) of frames, chosen
+    /// deterministically, for a fast estimate. Ignored without --dry-run.
+    #[arg(long, value_name = "FRACTION")]
+    sample: Option<f64>,
+    /// Seed for --sample frame selection (deterministic; default 0).
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    sample_seed: u64,
+    /// Write a JSON run report (effective config + reduction stats) to this file.
+    #[arg(long, value_name = "FILE")]
+    report: Option<PathBuf>,
+
     /// Worker threads (default: all cores).
     #[arg(long)]
     threads: Option<usize>,
@@ -206,6 +269,69 @@ struct Cli {
     /// Quiet: log only warnings and errors. Overridden by RUST_LOG.
     #[arg(short, long, conflicts_with = "verbose")]
     quiet: bool,
+}
+
+/// Named bundle of MS1 gates selected by `--preset`. Presets only flip the gate
+/// *enables* (with default pads); every other knob keeps its CLI / config / default
+/// resolution, and an explicit gate flag always wins over the preset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum Preset {
+    /// Enable nothing (current default behaviour).
+    None,
+    /// Detect the acquisition scheme and enable the matching gate(s).
+    Auto,
+    /// ddaPASEF: enable the MS1 selection-polygon gate.
+    Dda,
+    /// diaPASEF: enable the MS1 and MS/MS isolation-window gates.
+    Dia,
+}
+
+/// The gate enables a preset asks for. `None` fields leave the knob to its normal
+/// CLI / config / default resolution; `Some(true)` turns a gate on unless an
+/// explicit flag already did.
+#[derive(Clone, Copy, Default)]
+struct PresetGates {
+    ms1_polygon: Option<bool>,
+    dia_ms1_window: Option<bool>,
+    dia_window: Option<bool>,
+}
+
+impl Preset {
+    /// Resolve this preset to its gate enables. `Auto` inspects the input `.d`;
+    /// ddaPASEF maps to [`Preset::Dda`], diaPASEF to [`Preset::Dia`], and anything
+    /// else (MS1-only / unknown) enables nothing.
+    fn gates(self, input: &Path) -> Result<PresetGates> {
+        let effective = match self {
+            Preset::None => return Ok(PresetGates::default()),
+            Preset::Auto => match dnoise::detect_acquisition(input)? {
+                Acquisition::DdaPasef => {
+                    info!("preset auto: detected ddaPASEF -> selection-polygon gate");
+                    Preset::Dda
+                }
+                Acquisition::DiaPasef => {
+                    info!("preset auto: detected diaPASEF -> isolation-window gates");
+                    Preset::Dia
+                }
+                other => {
+                    info!(?other, "preset auto: no gate preset for this scheme");
+                    Preset::None
+                }
+            },
+            explicit => explicit,
+        };
+        Ok(match effective {
+            Preset::Dda => PresetGates {
+                ms1_polygon: Some(true),
+                ..PresetGates::default()
+            },
+            Preset::Dia => PresetGates {
+                dia_ms1_window: Some(true),
+                dia_window: Some(true),
+                ..PresetGates::default()
+            },
+            _ => PresetGates::default(),
+        })
+    }
 }
 
 /// Map the `-v` (repeatable) / `-q` flags to the `dnoise` log level used when
@@ -294,6 +420,19 @@ struct FileConfig {
     ms1_polygon_mz_pad: Option<f64>,
     ms1_polygon_im_pad: Option<f64>,
     all_frames: Option<bool>,
+    // Region-of-interest crop.
+    mz_min: Option<f64>,
+    mz_max: Option<f64>,
+    im_min: Option<f64>,
+    im_max: Option<f64>,
+    rt_min: Option<f64>,
+    rt_max: Option<f64>,
+    min_intensity: Option<u32>,
+    max_intensity: Option<u32>,
+    crop_only: Option<bool>,
+    // ppm-based m/z window.
+    mz_ppm: Option<f64>,
+    mz_ppm_ref: Option<f64>,
     threads: Option<usize>,
 }
 
@@ -324,7 +463,7 @@ fn main() -> Result<()> {
 
     // Each knob below resolves via `pick!`: CLI flag > config file > built-in default.
     let d = FilterParams::default();
-    let params = FilterParams {
+    let mut params = FilterParams {
         mz_half_width: pick!(cli.mz_half_width, cfg.mz_half_width, d.mz_half_width),
         min_feature_length: pick!(
             cli.min_feature_length,
@@ -348,6 +487,26 @@ fn main() -> Result<()> {
         ),
         num_iterations: pick!(cli.iterations, cfg.iterations, d.num_iterations),
     };
+
+    // ppm-based m/z window: when set, derive the vertical filter's TOF-index
+    // half-width from a mass tolerance at a reference m/z (CLI > config), overriding
+    // whatever --mz-half-width resolved to above.
+    if let Some(ppm) = cli.mz_ppm.or(cfg.mz_ppm) {
+        let ref_mz = cli.mz_ppm_ref.or(cfg.mz_ppm_ref);
+        let hw = dnoise::tof_half_width_for_ppm(&cli.input, ppm, ref_mz)?;
+        let ref_desc = ref_mz.map_or_else(|| "auto (acq midpoint)".to_string(), |m| m.to_string());
+        info!(
+            ppm,
+            ref_mz = %ref_desc,
+            mz_half_width = hw,
+            "config: m/z window derived from ppm"
+        );
+        params.mz_half_width = hw;
+    }
+
+    // Resolve the preset's gate enables (Auto inspects the input `.d`). These act as
+    // an extra default layer under the explicit CLI flags and config file below.
+    let preset_gates = cli.preset.gates(&cli.input)?;
 
     // Pre-filter smoothing radius (decoupled from the filter knobs above): explicit
     // CLI flag > config file > 0 (off).
@@ -487,7 +646,8 @@ fn main() -> Result<()> {
     // diaPASEF isolation-window features (both off by default, diaPASEF-only).
     // `dia_window` gates out-of-window MS/MS points; `dia_per_window` makes the
     // MS/MS filter run window-by-window. Both share the DiaFrameMsMs* tables.
-    let dia_window_enabled = cli.dia_window || cfg.dia_window.unwrap_or(false);
+    let dia_window_enabled =
+        cli.dia_window || cfg.dia_window.or(preset_gates.dia_window).unwrap_or(false);
     let d = DiaWindowParams::default();
     let dia_window = DiaWindowParams {
         scan_pad: pick!(cli.dia_window_scan_pad, cfg.dia_window_scan_pad, d.scan_pad),
@@ -497,7 +657,11 @@ fn main() -> Result<()> {
     // diaPASEF MS1 out-of-window gate (off by default, diaPASEF-only): drop MS1
     // points outside every isolation window's (m/z, mobility) region, padded in
     // physical units. CLI > config > default for the pads.
-    let dia_ms1_enabled = cli.dia_ms1_window || cfg.dia_ms1_window.unwrap_or(false);
+    let dia_ms1_enabled = cli.dia_ms1_window
+        || cfg
+            .dia_ms1_window
+            .or(preset_gates.dia_ms1_window)
+            .unwrap_or(false);
     let d = DiaMs1WindowParams::default();
     let dia_ms1 = DiaMs1WindowParams {
         mz_pad: pick!(cli.dia_ms1_mz_pad, cfg.dia_ms1_mz_pad, d.mz_pad),
@@ -507,11 +671,50 @@ fn main() -> Result<()> {
     // MS1 selection-polygon gate (off by default): drop MS1 points outside the
     // run's IMS PolygonFilter. CLI > config > default for the pads. Auto-detects
     // polygon presence (no-op otherwise).
-    let ms1_polygon_enabled = cli.ms1_polygon || cfg.ms1_polygon.unwrap_or(false);
+    let ms1_polygon_enabled =
+        cli.ms1_polygon || cfg.ms1_polygon.or(preset_gates.ms1_polygon).unwrap_or(false);
     let d = Ms1PolygonParams::default();
     let ms1_polygon = Ms1PolygonParams {
         mz_pad: pick!(cli.ms1_polygon_mz_pad, cfg.ms1_polygon_mz_pad, d.mz_pad),
         im_pad: pick!(cli.ms1_polygon_im_pad, cfg.ms1_polygon_im_pad, d.im_pad),
+    };
+
+    // Region-of-interest crop (CLI > config for each bound). A subset of the raw
+    // acquisition, applied to every frame; empty when no bound is set.
+    let crop = CropParams {
+        mz_min: cli.mz_min.or(cfg.mz_min),
+        mz_max: cli.mz_max.or(cfg.mz_max),
+        im_min: cli.im_min.or(cfg.im_min),
+        im_max: cli.im_max.or(cfg.im_max),
+        rt_min: cli.rt_min.or(cfg.rt_min),
+        rt_max: cli.rt_max.or(cfg.rt_max),
+        min_intensity: cli.min_intensity.or(cfg.min_intensity),
+        max_intensity: cli.max_intensity.or(cfg.max_intensity),
+    };
+    let crop_only = cli.crop_only || cfg.crop_only.unwrap_or(false);
+    if crop_only && crop.is_empty() {
+        anyhow::bail!("--crop-only needs at least one crop bound (--mz-min/--im-min/--rt-min/…)");
+    }
+
+    // Dry-run / sampling / report.
+    let dry_run = cli.dry_run;
+    if dry_run && cli.in_place {
+        anyhow::bail!("--dry-run writes nothing, so it cannot be combined with --in-place");
+    }
+    let sample = match cli.sample {
+        Some(f) => {
+            if !dry_run {
+                anyhow::bail!("--sample only applies with --dry-run");
+            }
+            if !(f > 0.0 && f <= 1.0) {
+                anyhow::bail!("--sample must be a fraction in (0, 1], got {f}");
+            }
+            Some(SampleSpec {
+                fraction: f,
+                seed: cli.sample_seed,
+            })
+        }
+        None => None,
     };
 
     // Boolean/operational flags: the CLI flag can only turn `all_frames` on; when
@@ -564,13 +767,23 @@ fn main() -> Result<()> {
         dia_per_window,
         dia_ms1 = dia_ms1_enabled,
         ms1_polygon = ms1_polygon_enabled,
+        preset = ?cli.preset,
+        crop = !crop.is_empty(),
+        crop_only,
+        dry_run,
         "config: enabled stages"
     );
 
     // Resolve where to write. In-place mode writes to a temp sibling folder and
-    // swaps it over the input on success; otherwise the OUTPUT argument is used.
+    // swaps it over the input on success; otherwise the OUTPUT argument is used. A
+    // dry run writes nothing, so OUTPUT is optional and the path is only a
+    // placeholder the pipeline never touches.
     let out_path = if cli.in_place {
         sibling_with_suffix(&cli.input, ".dnoise-tmp")
+    } else if dry_run {
+        cli.output
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("dnoise-dry-run-unused"))
     } else {
         cli.output
             .clone()
@@ -578,6 +791,14 @@ fn main() -> Result<()> {
     };
     // The temp folder is ours to clobber, so force-overwrite any stale leftover.
     let force = cli.force || cli.in_place;
+
+    let options = RunOptions {
+        force,
+        dry_run,
+        crop: (!crop.is_empty()).then_some(&crop),
+        crop_only,
+        sample,
+    };
 
     // Progress rendering adapts to the output: an interactive bar when stderr is a
     // terminal, otherwise periodic log lines at ~10% steps so piped/captured output
@@ -592,7 +813,7 @@ fn main() -> Result<()> {
     }
     let start = Instant::now();
     let mut last_decile = 0u64;
-    let result = dnoise::denoise_with_progress(&cli.input, &out_path, &params, &stages, force, |p| {
+    let result = dnoise::denoise_with_options(&cli.input, &out_path, &params, &stages, &options, |p| {
         pb.set_length(p.frames_total as u64);
         pb.set_position(p.frames_done as u64);
         if !interactive && p.frames_total > 0 {
@@ -624,7 +845,8 @@ fn main() -> Result<()> {
 
     // In-place swap: move the original aside, install the denoised folder under the
     // input's name, then drop the backup. On a failed install, restore the original.
-    if cli.in_place {
+    // (A dry run produced no temp folder, so there is nothing to swap.)
+    if cli.in_place && !dry_run {
         let backup = sibling_with_suffix(&cli.input, ".dnoise-old");
         if backup.exists() {
             std::fs::remove_dir_all(&backup)
@@ -658,16 +880,126 @@ fn main() -> Result<()> {
     } else {
         0.0
     };
-    // Canonical result line on stdout (logs went to stderr): easy to grep/parse.
+
+    // Optional JSON report: the effective config plus the reduction stats, for
+    // parameter sweeps and provenance. Written for both real and dry runs.
+    if let Some(path) = &cli.report {
+        let report = build_report(&cli, &params, &stages, &crop, &stats, elapsed);
+        std::fs::write(path, serde_json::to_string_pretty(&report)? + "\n")
+            .with_context(|| format!("writing report to {}", path.display()))?;
+        info!(report = %path.display(), "wrote run report");
+    }
+
+    // Canonical result line on stdout (logs went to stderr): easy to grep/parse. A
+    // dry run is flagged so the line is not mistaken for a written output.
+    let tag = if stats.dry_run { " [dry-run]" } else { "" };
+    let sampled = if stats.processed_frames != stats.frames {
+        format!(" ({} sampled)", stats.processed_frames)
+    } else {
+        String::new()
+    };
     println!(
-        "dnoise: {} frames, {} -> {} points kept ({:.1}%) in {:.1}s",
+        "dnoise:{} {} frames{}, {} -> {} points kept ({:.1}%) in {:.1}s",
+        tag,
         stats.frames,
+        sampled,
         stats.raw_points,
         stats.kept_points,
         pct,
         elapsed.as_secs_f64()
     );
     Ok(())
+}
+
+/// Assemble the `--report` JSON: the run's effective configuration (filter knobs,
+/// enabled stages, crop, preset) alongside the reduction statistics. Serialised
+/// with `serde_json` so downstream tooling (sweeps, provenance) can parse it.
+fn build_report(
+    cli: &Cli,
+    params: &FilterParams,
+    stages: &Stages,
+    crop: &CropParams,
+    stats: &dnoise::DenoiseStats,
+    elapsed: std::time::Duration,
+) -> serde_json::Value {
+    use serde_json::json;
+    let pct = |kept: u64, raw: u64| {
+        if raw > 0 {
+            (10_000.0 * kept as f64 / raw as f64).round() / 100.0
+        } else {
+            0.0
+        }
+    };
+    json!({
+        "input": cli.input.display().to_string(),
+        "output": (!stats.dry_run).then(|| out_display(cli)),
+        "acquisition": dnoise::detect_acquisition(&cli.input)
+            .map(|a| format!("{a:?}"))
+            .unwrap_or_else(|_| "unknown".into()),
+        "preset": format!("{:?}", cli.preset),
+        "dry_run": stats.dry_run,
+        "sample": cli.sample.map(|f| json!({ "fraction": f, "seed": cli.sample_seed })),
+        "config": {
+            "vertical_filter": {
+                "mz_half_width": params.mz_half_width,
+                "min_feature_length": params.min_feature_length,
+                "max_internal_gap": params.max_internal_gap,
+                "min_window_intensity": params.min_window_intensity,
+                "min_feature_intensity": params.min_feature_intensity,
+                "iterations": params.num_iterations,
+            },
+            "mz_ppm": cli.mz_ppm,
+            "stages": {
+                "all_frames": stages.filter_all_frames,
+                "frame_half_width": stages.frame_half_width,
+                "halo": stages.halo.is_some(),
+                "denoise_msms": stages.denoise_msms.is_some(),
+                "smooth": stages.smooth.is_some(),
+                "watershed": stages.watershed.is_some(),
+                "box_centroid": stages.box_centroid.is_some(),
+                "dia_window": stages.dia_window.is_some(),
+                "dia_per_window": stages.dia_per_window,
+                "dia_ms1_window": stages.dia_ms1.is_some(),
+                "ms1_polygon": stages.ms1_polygon.is_some(),
+            },
+            "crop": {
+                "mz_min": crop.mz_min, "mz_max": crop.mz_max,
+                "im_min": crop.im_min, "im_max": crop.im_max,
+                "rt_min": crop.rt_min, "rt_max": crop.rt_max,
+                "min_intensity": crop.min_intensity, "max_intensity": crop.max_intensity,
+                "crop_only": cli.crop_only,
+            },
+        },
+        "stats": {
+            "frames": stats.frames,
+            "ms1_frames": stats.ms1_frames,
+            "msms_frames": stats.msms_frames,
+            "cropped_frames": stats.cropped_frames,
+            "processed_frames": stats.processed_frames,
+            "raw_points": stats.raw_points,
+            "kept_points": stats.kept_points,
+            "kept_pct": pct(stats.kept_points, stats.raw_points),
+            "raw_ms1_points": stats.raw_ms1_points,
+            "kept_ms1_points": stats.kept_ms1_points,
+            "ms1_kept_pct": pct(stats.kept_ms1_points, stats.raw_ms1_points),
+            "raw_summed_intensity": stats.raw_summed_intensity,
+            "kept_summed_intensity": stats.kept_summed_intensity,
+        },
+        "elapsed_seconds": (elapsed.as_secs_f64() * 1000.0).round() / 1000.0,
+    })
+}
+
+/// Best-effort display path of the output folder for the report (empty for
+/// in-place, where the input path is the destination).
+fn out_display(cli: &Cli) -> String {
+    if cli.in_place {
+        cli.input.display().to_string()
+    } else {
+        cli.output
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
