@@ -3,7 +3,7 @@
 //! polls a channel for progress and results.
 
 use crate::settings::{OutputMode, PresetChoice, Settings};
-use crate::worker::{WorkerMsg, run_batch};
+use crate::worker::{RunMode, WorkerMsg, run_batch};
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,6 +23,8 @@ struct RunState {
     current: usize,
     done_frames: usize,
     total_frames: usize,
+    /// Verb shown on the progress bar ("Denoising" / "Estimating").
+    verb: &'static str,
 }
 
 /// The whole GUI state.
@@ -69,25 +71,32 @@ impl DnoiseApp {
         self.queue.push(QueuedInput { path: p, scheme });
     }
 
-    /// Spawn the worker thread for the current queue + settings.
-    fn start_run(&mut self, ctx: &egui::Context) {
+    /// Spawn the worker thread for the current queue + settings in the given mode.
+    fn start_run(&mut self, ctx: &egui::Context, mode: RunMode) {
         self.cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
         self.rx = Some(rx);
+        let verb = match mode {
+            RunMode::Estimate { .. } => "Estimating",
+            RunMode::Full => "Denoising",
+        };
         self.run = Some(RunState {
             n_files: self.queue.len(),
             current: 0,
             done_frames: 0,
             total_frames: 0,
+            verb,
         });
         let inputs: Vec<PathBuf> = self.queue.iter().map(|q| q.path.clone()).collect();
         let settings = self.settings.clone();
         let cancel = self.cancel.clone();
         let ctx = ctx.clone();
-        self.log
-            .push(format!("Started: {} file(s).", self.queue.len()));
+        self.log.push(format!(
+            "{verb}: {} file(s)…",
+            self.queue.len()
+        ));
         std::thread::spawn(move || {
-            run_batch(inputs, settings, tx, cancel);
+            run_batch(inputs, settings, mode, tx, cancel);
             ctx.request_repaint();
         });
     }
@@ -117,6 +126,12 @@ impl DnoiseApp {
                         out.display()
                     ));
                 }
+                WorkerMsg::Estimate { file, kept_pct } => {
+                    self.log.push(format!(
+                        "  [{}] estimate: ~{kept_pct:.1}% kept (frame sample)",
+                        file + 1
+                    ));
+                }
                 WorkerMsg::FileError { file, error } => {
                     self.log.push(format!("  ERROR on file {}: {error}", file + 1));
                 }
@@ -130,6 +145,107 @@ impl DnoiseApp {
             self.run = None;
             self.rx = None;
         }
+    }
+
+    /// The collapsible advanced-settings panel: every filter / halo / gate / crop /
+    /// ppm knob. Defaults match the tuned CLI defaults, so leaving it closed
+    /// reproduces the standard run.
+    fn advanced_panel(&mut self, ui: &mut egui::Ui) {
+        let s = &mut self.settings;
+
+        // Vertical filter (the core denoiser aggressiveness).
+        ui.strong("Vertical filter");
+        egui::Grid::new("vfilter").num_columns(2).show(ui, |ui| {
+            ui.label("min feature length (scans)");
+            ui.add(egui::DragValue::new(&mut s.min_feature_length).range(1..=100));
+            ui.end_row();
+            ui.label("max internal gap (scans)");
+            ui.add(egui::DragValue::new(&mut s.max_internal_gap).range(0..=50));
+            ui.end_row();
+            ui.label("iterations");
+            ui.add(egui::DragValue::new(&mut s.iterations).range(1..=10));
+            ui.end_row();
+            ui.label("min per-scan intensity");
+            ui.add(egui::DragValue::new(&mut s.min_window_intensity).speed(1.0));
+            ui.end_row();
+            ui.label("min feature intensity");
+            ui.add(egui::DragValue::new(&mut s.min_feature_intensity).speed(1.0));
+            ui.end_row();
+        });
+
+        // m/z window: raw TOF half-width, or a ppm tolerance.
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut s.use_ppm, "m/z window from ppm");
+            if s.use_ppm {
+                ui.add(egui::DragValue::new(&mut s.mz_ppm).range(1.0..=100.0).suffix(" ppm"));
+            } else {
+                ui.label("half-width");
+                ui.add(egui::DragValue::new(&mut s.mz_half_width).range(1..=50));
+                ui.weak("TOF idx");
+            }
+        });
+
+        ui.separator();
+
+        // Halo filter.
+        ui.checkbox(&mut s.halo, "Horizontal-halo filter");
+        if s.halo {
+            egui::Grid::new("halo").num_columns(2).show(ui, |ui| {
+                ui.label("peak fraction");
+                ui.add(
+                    egui::DragValue::new(&mut s.halo_peak_fraction)
+                        .range(0.0..=1.0)
+                        .speed(0.01),
+                );
+                ui.end_row();
+                ui.label("m/z-idx half-width");
+                ui.add(egui::DragValue::new(&mut s.halo_mz_idx_half_width).range(1..=500));
+                ui.end_row();
+                ui.label("scan half-width");
+                ui.add(egui::DragValue::new(&mut s.halo_scan_half_width).range(0..=50));
+                ui.end_row();
+            });
+        }
+
+        ui.separator();
+
+        // Gate override (else the preset decides).
+        ui.checkbox(&mut s.follow_preset_gates, "Gates follow the preset");
+        ui.add_enabled_ui(!s.follow_preset_gates, |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut s.ms1_polygon, "MS1 polygon");
+                ui.checkbox(&mut s.dia_ms1_window, "DIA MS1 window");
+                ui.checkbox(&mut s.dia_window, "DIA MS/MS window");
+            });
+        });
+
+        ui.separator();
+
+        // Region-of-interest crop.
+        ui.strong("Crop / trim (blank = no bound)");
+        let field = |ui: &mut egui::Ui, label: &str, v: &mut String, hint: &str| {
+            ui.label(label);
+            ui.add(
+                egui::TextEdit::singleline(v)
+                    .desired_width(80.0)
+                    .hint_text(hint),
+            );
+        };
+        egui::Grid::new("crop").num_columns(4).show(ui, |ui| {
+            field(ui, "m/z min", &mut s.mz_min, "Da");
+            field(ui, "m/z max", &mut s.mz_max, "Da");
+            ui.end_row();
+            field(ui, "1/K0 min", &mut s.im_min, "");
+            field(ui, "1/K0 max", &mut s.im_max, "");
+            ui.end_row();
+            field(ui, "RT min", &mut s.rt_min, "min");
+            field(ui, "RT max", &mut s.rt_max, "min");
+            ui.end_row();
+            field(ui, "intensity min", &mut s.min_intensity, "");
+            field(ui, "intensity max", &mut s.max_intensity, "");
+            ui.end_row();
+        });
+        ui.checkbox(&mut s.crop_only, "Crop only (skip denoising)");
     }
 }
 
@@ -287,9 +403,18 @@ impl eframe::App for DnoiseApp {
                 });
             });
 
+            ui.add_space(6.0);
+
+            // --- Advanced ---
+            ui.add_enabled_ui(!running, |ui| {
+                egui::CollapsingHeader::new("Advanced settings")
+                    .default_open(false)
+                    .show(ui, |ui| self.advanced_panel(ui));
+            });
+
             ui.add_space(8.0);
 
-            // --- Run / Cancel + progress ---
+            // --- Run / Estimate / Cancel + progress ---
             ui.horizontal(|ui| {
                 if running {
                     if ui.button("■  Cancel").clicked() {
@@ -297,11 +422,21 @@ impl eframe::App for DnoiseApp {
                         self.log
                             .push("Cancel requested — stops after the current file.".to_string());
                     }
-                } else if ui
-                    .add_enabled(!self.queue.is_empty(), egui::Button::new("▶  Run"))
-                    .clicked()
-                {
-                    self.start_run(ctx);
+                } else {
+                    let have = !self.queue.is_empty();
+                    if ui
+                        .add_enabled(have, egui::Button::new("▶  Run"))
+                        .clicked()
+                    {
+                        self.start_run(ctx, RunMode::Full);
+                    }
+                    if ui
+                        .add_enabled(have, egui::Button::new("⚡ Estimate reduction"))
+                        .on_hover_text("Dry-run an 8% frame sample — no output written")
+                        .clicked()
+                    {
+                        self.start_run(ctx, RunMode::Estimate { fraction: 0.08 });
+                    }
                 }
             });
 
@@ -312,7 +447,8 @@ impl eframe::App for DnoiseApp {
                     0.0
                 };
                 ui.add(egui::ProgressBar::new(frac).text(format!(
-                    "file {} of {} — {}/{} frames",
+                    "{} file {} of {} — {}/{} frames",
+                    r.verb,
                     r.current + 1,
                     r.n_files,
                     r.done_frames,
