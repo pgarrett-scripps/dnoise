@@ -27,14 +27,16 @@ default = ["cli"]
 # The `dnoise` command-line binary and its dependencies. Disable
 # (`--no-default-features`) to build only the library.
 cli = [
+    "config",
     "dep:anyhow",
     "dep:clap",
     "dep:indicatif",
-    "dep:serde",
     "dep:serde_json",
-    "dep:toml",
     "dep:tracing-subscriber",
 ]
+# On-disk `dnoise.toml` config (the `config` module). Pulls in serde + toml. The
+# CLI needs it; the GUI opts in explicitly to share the same schema.
+config = ["dep:serde", "dep:toml"]
 
 [[bin]]
 name = "dnoise"

@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use timsrust::converters::ConvertableDomain;
 use timsrust::readers::{FrameReader, MetadataReader};
 use tracing::{debug, info, warn};
@@ -91,8 +92,9 @@ pub struct SampleSpec {
 }
 
 /// Run-level options orthogonal to the filter itself: overwrite behaviour, the
-/// region-of-interest crop, crop-only mode, and dry-run / sampling. Bundled so the
-/// `denoise*` entry points stay to a few arguments.
+/// region-of-interest crop, crop-only mode, dry-run / sampling, and an optional
+/// cancellation token. Bundled so the `denoise*` entry points stay to a few
+/// arguments.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RunOptions<'a> {
     /// Overwrite an existing `output` folder.
@@ -108,6 +110,10 @@ pub struct RunOptions<'a> {
     /// Dry-run frame sampling for a fast reduction estimate (`None` = all frames).
     /// Only honoured together with `dry_run`.
     pub sample: Option<SampleSpec>,
+    /// Cooperative cancellation token. When set and flipped to `true`, the run
+    /// stops at the next frame-chunk boundary and returns [`DnoiseError::Cancelled`];
+    /// the caller should discard any partial output. `None` = never cancelled.
+    pub cancel: Option<&'a AtomicBool>,
 }
 
 /// Deterministic per-frame selector for dry-run sampling: hash `(seed, index)`
@@ -199,6 +205,7 @@ fn run<F: FnMut(Progress)>(
         crop,
         crop_only,
         sample,
+        cancel,
     } = options;
     // Unpack the stages this function builds gates from; the per-frame stages
     // (smoothing, centroiding, etc.) are forwarded to `process_frame` via `stages`.
@@ -456,6 +463,13 @@ fn run<F: FnMut(Progress)>(
     let mut frames_done: usize = 0;
 
     for chunk in selected.chunks(CHUNK) {
+        // Cooperative cancellation: check once per chunk (a real run's partial
+        // output is incomplete, so the caller discards it on Cancelled).
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                return Err(DnoiseError::Cancelled);
+            }
+        }
         let processed: Vec<ProcessedFrame> = chunk
             .par_iter()
             .map(|&i| process_frame(&reader, &meta, i, params, stages, &ctx))

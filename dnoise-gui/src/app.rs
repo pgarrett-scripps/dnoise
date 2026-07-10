@@ -31,6 +31,7 @@ struct RunState {
 pub struct DnoiseApp {
     queue: Vec<QueuedInput>,
     path_entry: String,
+    config_path: String,
     settings: Settings,
     run: Option<RunState>,
     rx: Option<Receiver<WorkerMsg>>,
@@ -43,6 +44,7 @@ impl Default for DnoiseApp {
         Self {
             queue: Vec::new(),
             path_entry: String::new(),
+            config_path: String::new(),
             settings: Settings::default(),
             run: None,
             rx: None,
@@ -69,6 +71,26 @@ impl DnoiseApp {
             .map(|a| format!("{a:?}"))
             .unwrap_or_else(|_| "?".to_string());
         self.queue.push(QueuedInput { path: p, scheme });
+    }
+
+    /// Load a `dnoise.toml` into the advanced settings.
+    fn load_config(&mut self, path: &std::path::Path) {
+        match dnoise::config::Config::load(path) {
+            Ok(c) => {
+                self.settings.apply_config(&c);
+                self.config_path = path.display().to_string();
+                self.log.push(format!("loaded settings from {}", path.display()));
+            }
+            Err(e) => self.log.push(format!("load failed: {e}")),
+        }
+    }
+
+    /// Save the current advanced settings to a `dnoise.toml`.
+    fn save_config(&mut self, path: &std::path::Path) {
+        match self.settings.to_config().save(path) {
+            Ok(()) => self.log.push(format!("saved settings to {}", path.display())),
+            Err(e) => self.log.push(format!("save failed: {e}")),
+        }
     }
 
     /// Spawn the worker thread for the current queue + settings in the given mode.
@@ -251,11 +273,16 @@ impl DnoiseApp {
 
 impl eframe::App for DnoiseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Ingest any folders dropped onto the window.
+        // Ingest dropped items: a `.toml` loads settings, anything else is queued as
+        // an input `.d`.
         let dropped: Vec<PathBuf> =
             ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         for p in dropped {
-            self.add_path(p);
+            if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("toml")) {
+                self.load_config(&p);
+            } else {
+                self.add_path(p);
+            }
         }
 
         self.poll_worker();
@@ -412,6 +439,27 @@ impl eframe::App for DnoiseApp {
                     .show(ui, |ui| self.advanced_panel(ui));
             });
 
+            // Save / load the advanced knobs as a CLI-compatible dnoise.toml.
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Settings file:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.config_path)
+                        .hint_text("/path/to/dnoise.toml")
+                        .desired_width(300.0),
+                );
+                let has = !self.config_path.trim().is_empty();
+                if ui.add_enabled(has && !running, egui::Button::new("Save")).clicked() {
+                    let p = PathBuf::from(self.config_path.trim());
+                    self.save_config(&p);
+                }
+                if ui.add_enabled(has && !running, egui::Button::new("Load")).clicked() {
+                    let p = PathBuf::from(self.config_path.trim());
+                    self.load_config(&p);
+                }
+            });
+            ui.weak("Tip: drag a .toml onto the window to load it.");
+
             ui.add_space(8.0);
 
             // --- Run / Estimate / Cancel + progress ---
@@ -420,7 +468,7 @@ impl eframe::App for DnoiseApp {
                     if ui.button("■  Cancel").clicked() {
                         self.cancel.store(true, Ordering::Relaxed);
                         self.log
-                            .push("Cancel requested — stops after the current file.".to_string());
+                            .push("Cancel requested — stopping…".to_string());
                     }
                 } else {
                     let have = !self.queue.is_empty();

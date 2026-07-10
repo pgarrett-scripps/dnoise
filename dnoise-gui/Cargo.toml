@@ -10,8 +10,9 @@ license = "MIT"
 publish = false
 
 [dependencies]
-# The denoiser itself, linked in-process (library only — no CLI deps pulled in).
-dnoise = { path = "..", default-features = false }
+# The denoiser itself, linked in-process. `config` shares the dnoise.toml schema
+# with the CLI (Load/Save settings); no CLI binary deps are pulled in.
+dnoise = { path = "..", default-features = false, features = ["config"] }
 # Immediate-mode GUI + native window/event loop. Drag-and-drop and path entry
 # handle input, so no native file-dialog crate (rfd/GTK) is needed yet — native
 # OS pickers are a Phase 2 addition behind a platform-gated dependency.

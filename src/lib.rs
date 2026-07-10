@@ -34,6 +34,8 @@
 pub mod average;
 pub mod box_centroid;
 pub mod codec;
+#[cfg(feature = "config")]
+pub mod config;
 pub mod crop;
 pub mod dia_ms1;
 pub mod dia_window;

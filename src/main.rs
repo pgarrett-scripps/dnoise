@@ -8,7 +8,6 @@ use dnoise::{
     WatershedParams,
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use serde::Deserialize;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -373,76 +372,11 @@ fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// On-disk config. Every field is optional; missing keys fall back to CLI flags,
-/// then to [`FilterParams::default`]. Unknown keys are rejected to catch typos.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct FileConfig {
-    mz_half_width: Option<u32>,
-    min_feature_length: Option<usize>,
-    max_internal_gap: Option<usize>,
-    min_window_intensity: Option<u64>,
-    min_feature_intensity: Option<u64>,
-    iterations: Option<usize>,
-    frame_half_width: Option<usize>,
-    halo: Option<bool>,
-    halo_peak_fraction: Option<f64>,
-    halo_mz_idx_half_width: Option<u32>,
-    halo_scan_half_width: Option<usize>,
-    denoise_msms: Option<bool>,
-    msms_mz_half_width: Option<u32>,
-    msms_min_feature_length: Option<usize>,
-    msms_max_internal_gap: Option<usize>,
-    msms_min_window_intensity: Option<u64>,
-    msms_min_feature_intensity: Option<u64>,
-    msms_iterations: Option<usize>,
-    smooth: Option<bool>,
-    smooth_mz_idx_half_width: Option<u32>,
-    smooth_scan_half_width: Option<usize>,
-    smooth_iterations: Option<usize>,
-    watershed: Option<bool>,
-    watershed_box_scan: Option<u32>,
-    watershed_box_mz_idx: Option<u32>,
-    watershed_min_seed_intensity: Option<u64>,
-    watershed_min_centroid_total: Option<u64>,
-    watershed_max_tof_offset: Option<u32>,
-    box_centroid: Option<bool>,
-    box_centroid_mz_idx_half: Option<u32>,
-    box_centroid_scan_half: Option<u32>,
-    box_centroid_min_total: Option<u64>,
-    dia_window: Option<bool>,
-    dia_window_scan_pad: Option<u32>,
-    dia_per_window: Option<bool>,
-    dia_ms1_window: Option<bool>,
-    dia_ms1_mz_pad: Option<f64>,
-    dia_ms1_im_pad: Option<f64>,
-    ms1_polygon: Option<bool>,
-    ms1_polygon_mz_pad: Option<f64>,
-    ms1_polygon_im_pad: Option<f64>,
-    all_frames: Option<bool>,
-    // Region-of-interest crop.
-    mz_min: Option<f64>,
-    mz_max: Option<f64>,
-    im_min: Option<f64>,
-    im_max: Option<f64>,
-    rt_min: Option<f64>,
-    rt_max: Option<f64>,
-    min_intensity: Option<u32>,
-    max_intensity: Option<u32>,
-    crop_only: Option<bool>,
-    // ppm-based m/z window.
-    mz_ppm: Option<f64>,
-    mz_ppm_ref: Option<f64>,
-    threads: Option<usize>,
-}
-
-impl FileConfig {
-    fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading config file {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing config file {}", path.display()))
-    }
-}
+/// On-disk config, shared with the GUI: every field is optional; missing keys fall
+/// back to CLI flags, then to the built-in defaults. Defined once in the library
+/// (see [`dnoise::config::Config`]) so both front ends read and write the same
+/// schema; the field names below are its fields.
+use dnoise::config::Config as FileConfig;
 
 /// Resolve one knob with explicit CLI flag > config-file value > built-in default
 /// precedence. `$cli` and `$cfg` are `Option`s; `$default` is the fallback value.
@@ -457,7 +391,7 @@ fn main() -> Result<()> {
     init_logging(cli.verbose, cli.quiet);
 
     let cfg = match &cli.config {
-        Some(path) => FileConfig::load(path)?,
+        Some(path) => FileConfig::load(path).map_err(anyhow::Error::msg)?,
         None => FileConfig::default(),
     };
 
@@ -798,6 +732,7 @@ fn main() -> Result<()> {
         crop: (!crop.is_empty()).then_some(&crop),
         crop_only,
         sample,
+        cancel: None,
     };
 
     // Progress rendering adapts to the output: an interactive bar when stderr is a

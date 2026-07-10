@@ -1,8 +1,14 @@
 //! Run settings shared between the UI and the worker thread, plus the small
 //! preset -> gate and output-path helpers.
 
+use dnoise::config::Config;
 use dnoise::{Acquisition, CropParams, FilterParams, HaloParams};
 use std::path::{Path, PathBuf};
+
+/// Format an optional value as a crop text field ("" when unset).
+fn opt_str<T: ToString>(v: Option<T>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_default()
+}
 
 /// Acquisition preset chosen in the UI. Mirrors the CLI `--preset`: it only
 /// decides which MS1 gates are enabled (see [`resolve_gates`]).
@@ -256,6 +262,111 @@ impl Settings {
         }
     }
 
+    /// Project the advanced knobs to a CLI-compatible [`Config`] for saving. Output
+    /// location and preset are UI-session state, not part of the saved recipe.
+    pub fn to_config(&self) -> Config {
+        let mut c = Config::default();
+        if self.use_ppm {
+            c.mz_ppm = Some(self.mz_ppm);
+        } else {
+            c.mz_half_width = Some(self.mz_half_width);
+        }
+        c.min_feature_length = Some(self.min_feature_length);
+        c.max_internal_gap = Some(self.max_internal_gap);
+        c.iterations = Some(self.iterations);
+        c.min_window_intensity = Some(self.min_window_intensity);
+        c.min_feature_intensity = Some(self.min_feature_intensity);
+        c.halo = Some(self.halo);
+        if self.halo {
+            c.halo_peak_fraction = Some(self.halo_peak_fraction);
+            c.halo_mz_idx_half_width = Some(self.halo_mz_idx_half_width);
+            c.halo_scan_half_width = Some(self.halo_scan_half_width);
+        }
+        // Gates are only pinned when the user overrides the preset.
+        if !self.follow_preset_gates {
+            c.ms1_polygon = Some(self.ms1_polygon);
+            c.dia_ms1_window = Some(self.dia_ms1_window);
+            c.dia_window = Some(self.dia_window);
+        }
+        let crop = self.crop_params(&mut |_| {});
+        c.mz_min = crop.mz_min;
+        c.mz_max = crop.mz_max;
+        c.im_min = crop.im_min;
+        c.im_max = crop.im_max;
+        c.rt_min = crop.rt_min;
+        c.rt_max = crop.rt_max;
+        c.min_intensity = crop.min_intensity;
+        c.max_intensity = crop.max_intensity;
+        if self.crop_only {
+            c.crop_only = Some(true);
+        }
+        c
+    }
+
+    /// Apply a loaded [`Config`] onto the advanced knobs. Keys present override;
+    /// absent keys leave the field unchanged (crop fields, being authoritative, are
+    /// cleared when the key is absent).
+    pub fn apply_config(&mut self, c: &Config) {
+        if let Some(v) = c.mz_ppm {
+            self.use_ppm = true;
+            self.mz_ppm = v;
+        }
+        if let Some(v) = c.mz_half_width {
+            self.mz_half_width = v;
+            if c.mz_ppm.is_none() {
+                self.use_ppm = false;
+            }
+        }
+        if let Some(v) = c.min_feature_length {
+            self.min_feature_length = v;
+        }
+        if let Some(v) = c.max_internal_gap {
+            self.max_internal_gap = v;
+        }
+        if let Some(v) = c.iterations {
+            self.iterations = v;
+        }
+        if let Some(v) = c.min_window_intensity {
+            self.min_window_intensity = v;
+        }
+        if let Some(v) = c.min_feature_intensity {
+            self.min_feature_intensity = v;
+        }
+        if let Some(v) = c.halo {
+            self.halo = v;
+        }
+        if let Some(v) = c.halo_peak_fraction {
+            self.halo_peak_fraction = v;
+        }
+        if let Some(v) = c.halo_mz_idx_half_width {
+            self.halo_mz_idx_half_width = v;
+        }
+        if let Some(v) = c.halo_scan_half_width {
+            self.halo_scan_half_width = v;
+        }
+        if c.ms1_polygon.is_some() || c.dia_ms1_window.is_some() || c.dia_window.is_some() {
+            self.follow_preset_gates = false;
+            if let Some(v) = c.ms1_polygon {
+                self.ms1_polygon = v;
+            }
+            if let Some(v) = c.dia_ms1_window {
+                self.dia_ms1_window = v;
+            }
+            if let Some(v) = c.dia_window {
+                self.dia_window = v;
+            }
+        }
+        self.mz_min = opt_str(c.mz_min);
+        self.mz_max = opt_str(c.mz_max);
+        self.im_min = opt_str(c.im_min);
+        self.im_max = opt_str(c.im_max);
+        self.rt_min = opt_str(c.rt_min);
+        self.rt_max = opt_str(c.rt_max);
+        self.min_intensity = opt_str(c.min_intensity);
+        self.max_intensity = opt_str(c.max_intensity);
+        self.crop_only = c.crop_only.unwrap_or(false);
+    }
+
     /// Compute the output `.d` path for one input, or a user-facing error string.
     pub fn output_path(&self, input: &Path) -> Result<PathBuf, String> {
         let name = input
@@ -356,6 +467,30 @@ mod tests {
         assert_eq!(c.rt_min, None);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("rt_min"));
+    }
+
+    #[test]
+    fn settings_round_trip_through_config() {
+        let mut s = Settings::default();
+        s.min_feature_length = 8;
+        s.use_ppm = true;
+        s.mz_ppm = 15.0;
+        s.mz_min = "400".to_string();
+        s.follow_preset_gates = false;
+        s.ms1_polygon = true;
+        s.crop_only = true;
+
+        let c = s.to_config();
+        let mut s2 = Settings::default();
+        s2.apply_config(&c);
+
+        assert_eq!(s2.min_feature_length, 8);
+        assert!(s2.use_ppm);
+        assert_eq!(s2.mz_ppm, 15.0);
+        assert_eq!(s2.mz_min, "400");
+        assert!(!s2.follow_preset_gates);
+        assert!(s2.ms1_polygon);
+        assert!(s2.crop_only);
     }
 
     #[test]

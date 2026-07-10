@@ -71,7 +71,7 @@ pub fn run_batch(
             ));
             break;
         }
-        if let Err(e) = process_one(i, n, input, &settings, mode, &tx) {
+        if let Err(e) = process_one(i, n, input, &settings, mode, &tx, &cancel) {
             let _ = tx.send(WorkerMsg::FileError { file: i, error: e });
         }
     }
@@ -87,6 +87,7 @@ fn process_one(
     settings: &Settings,
     mode: RunMode,
     tx: &Sender<WorkerMsg>,
+    cancel: &AtomicBool,
 ) -> Result<(), String> {
     // A dry-run estimate writes nothing, so it needs no output path or overwrite.
     let output = if mode.is_estimate() {
@@ -151,17 +152,33 @@ fn process_one(
         crop: (!crop.is_empty()).then_some(&crop),
         crop_only: settings.crop_only,
         sample,
+        cancel: Some(cancel),
     };
 
     let txp = tx.clone();
-    let stats = denoise_with_options(input, &output, &params, &stages, &opts, |p: Progress| {
+    let stats = match denoise_with_options(input, &output, &params, &stages, &opts, |p: Progress| {
         let _ = txp.send(WorkerMsg::Progress {
             file: i,
             done: p.frames_done,
             total: p.frames_total,
         });
-    })
-    .map_err(|e| e.to_string())?;
+    }) {
+        Ok(s) => s,
+        Err(e) => {
+            // A cancel mid-file leaves an incomplete output — remove it and report
+            // the cancellation, not a failure.
+            if cancel.load(Ordering::Relaxed) {
+                if !mode.is_estimate() {
+                    let _ = std::fs::remove_dir_all(&output);
+                }
+                let _ = tx.send(WorkerMsg::Log(
+                    "  cancelled mid-file — partial output removed".to_string(),
+                ));
+                return Ok(());
+            }
+            return Err(e.to_string());
+        }
+    };
 
     let kept_pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64

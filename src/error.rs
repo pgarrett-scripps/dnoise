@@ -53,6 +53,11 @@ pub enum DnoiseError {
     /// An error from the `analysis.tdf` SQLite database.
     #[error("database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+
+    /// The run was cancelled via the [`crate::RunOptions::cancel`] token before it
+    /// finished. Any partial output is incomplete and should be discarded.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// Failure decoding a type-2 `tdf_bin` frame record (see [`crate::codec`]).
