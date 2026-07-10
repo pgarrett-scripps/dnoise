@@ -798,7 +798,12 @@ fn process_frame(
     // mask. Applies to every frame regardless of MS level (a subset of the raw
     // acquisition), and is the only active filter under `crop_only`.
     if let Some(cg) = crop {
-        cg.apply(&to_filter.scan, &to_filter.tof, &to_filter.intensity, &mut keep);
+        cg.apply(
+            &to_filter.scan,
+            &to_filter.tof,
+            &to_filter.intensity,
+            &mut keep,
+        );
     }
 
     let survivors = to_filter.survivors(&keep);

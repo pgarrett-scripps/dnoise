@@ -398,6 +398,9 @@ impl Settings {
 }
 
 #[cfg(test)]
+// The tests build a Settings and reassign a few fields on top of the default,
+// which is clearer than a giant struct literal for a ~30-field record.
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 

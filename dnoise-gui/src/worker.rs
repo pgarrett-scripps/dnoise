@@ -156,29 +156,30 @@ fn process_one(
     };
 
     let txp = tx.clone();
-    let stats = match denoise_with_options(input, &output, &params, &stages, &opts, |p: Progress| {
-        let _ = txp.send(WorkerMsg::Progress {
-            file: i,
-            done: p.frames_done,
-            total: p.frames_total,
-        });
-    }) {
-        Ok(s) => s,
-        Err(e) => {
-            // A cancel mid-file leaves an incomplete output — remove it and report
-            // the cancellation, not a failure.
-            if cancel.load(Ordering::Relaxed) {
-                if !mode.is_estimate() {
-                    let _ = std::fs::remove_dir_all(&output);
+    let stats =
+        match denoise_with_options(input, &output, &params, &stages, &opts, |p: Progress| {
+            let _ = txp.send(WorkerMsg::Progress {
+                file: i,
+                done: p.frames_done,
+                total: p.frames_total,
+            });
+        }) {
+            Ok(s) => s,
+            Err(e) => {
+                // A cancel mid-file leaves an incomplete output — remove it and report
+                // the cancellation, not a failure.
+                if cancel.load(Ordering::Relaxed) {
+                    if !mode.is_estimate() {
+                        let _ = std::fs::remove_dir_all(&output);
+                    }
+                    let _ = tx.send(WorkerMsg::Log(
+                        "  cancelled mid-file — partial output removed".to_string(),
+                    ));
+                    return Ok(());
                 }
-                let _ = tx.send(WorkerMsg::Log(
-                    "  cancelled mid-file — partial output removed".to_string(),
-                ));
-                return Ok(());
+                return Err(e.to_string());
             }
-            return Err(e.to_string());
-        }
-    };
+        };
 
     let kept_pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64

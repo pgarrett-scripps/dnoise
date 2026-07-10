@@ -79,7 +79,8 @@ impl DnoiseApp {
             Ok(c) => {
                 self.settings.apply_config(&c);
                 self.config_path = path.display().to_string();
-                self.log.push(format!("loaded settings from {}", path.display()));
+                self.log
+                    .push(format!("loaded settings from {}", path.display()));
             }
             Err(e) => self.log.push(format!("load failed: {e}")),
         }
@@ -88,7 +89,9 @@ impl DnoiseApp {
     /// Save the current advanced settings to a `dnoise.toml`.
     fn save_config(&mut self, path: &std::path::Path) {
         match self.settings.to_config().save(path) {
-            Ok(()) => self.log.push(format!("saved settings to {}", path.display())),
+            Ok(()) => self
+                .log
+                .push(format!("saved settings to {}", path.display())),
             Err(e) => self.log.push(format!("save failed: {e}")),
         }
     }
@@ -113,10 +116,8 @@ impl DnoiseApp {
         let settings = self.settings.clone();
         let cancel = self.cancel.clone();
         let ctx = ctx.clone();
-        self.log.push(format!(
-            "{verb}: {} file(s)…",
-            self.queue.len()
-        ));
+        self.log
+            .push(format!("{verb}: {} file(s)…", self.queue.len()));
         std::thread::spawn(move || {
             run_batch(inputs, settings, mode, tx, cancel);
             ctx.request_repaint();
@@ -155,7 +156,8 @@ impl DnoiseApp {
                     ));
                 }
                 WorkerMsg::FileError { file, error } => {
-                    self.log.push(format!("  ERROR on file {}: {error}", file + 1));
+                    self.log
+                        .push(format!("  ERROR on file {}: {error}", file + 1));
                 }
                 WorkerMsg::Finished => {
                     self.log.push("Batch finished.".to_string());
@@ -199,7 +201,11 @@ impl DnoiseApp {
         ui.horizontal(|ui| {
             ui.checkbox(&mut s.use_ppm, "m/z window from ppm");
             if s.use_ppm {
-                ui.add(egui::DragValue::new(&mut s.mz_ppm).range(1.0..=100.0).suffix(" ppm"));
+                ui.add(
+                    egui::DragValue::new(&mut s.mz_ppm)
+                        .range(1.0..=100.0)
+                        .suffix(" ppm"),
+                );
             } else {
                 ui.label("half-width");
                 ui.add(egui::DragValue::new(&mut s.mz_half_width).range(1..=50));
@@ -275,10 +281,17 @@ impl eframe::App for DnoiseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Ingest dropped items: a `.toml` loads settings, anything else is queued as
         // an input `.d`.
-        let dropped: Vec<PathBuf> =
-            ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
         for p in dropped {
-            if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("toml")) {
+            if p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
+            {
                 self.load_config(&p);
             } else {
                 self.add_path(p);
@@ -449,11 +462,17 @@ impl eframe::App for DnoiseApp {
                         .desired_width(300.0),
                 );
                 let has = !self.config_path.trim().is_empty();
-                if ui.add_enabled(has && !running, egui::Button::new("Save")).clicked() {
+                if ui
+                    .add_enabled(has && !running, egui::Button::new("Save"))
+                    .clicked()
+                {
                     let p = PathBuf::from(self.config_path.trim());
                     self.save_config(&p);
                 }
-                if ui.add_enabled(has && !running, egui::Button::new("Load")).clicked() {
+                if ui
+                    .add_enabled(has && !running, egui::Button::new("Load"))
+                    .clicked()
+                {
                     let p = PathBuf::from(self.config_path.trim());
                     self.load_config(&p);
                 }
@@ -467,15 +486,11 @@ impl eframe::App for DnoiseApp {
                 if running {
                     if ui.button("■  Cancel").clicked() {
                         self.cancel.store(true, Ordering::Relaxed);
-                        self.log
-                            .push("Cancel requested — stopping…".to_string());
+                        self.log.push("Cancel requested — stopping…".to_string());
                     }
                 } else {
                     let have = !self.queue.is_empty();
-                    if ui
-                        .add_enabled(have, egui::Button::new("▶  Run"))
-                        .clicked()
-                    {
+                    if ui.add_enabled(have, egui::Button::new("▶  Run")).clicked() {
                         self.start_run(ctx, RunMode::Full);
                     }
                     if ui

@@ -29,17 +29,24 @@ cargo build -p dnoise-gui --release # release binary at target/release/dnoise-gu
   ppm tolerance, or override the preset's gates.
 - **Estimate reduction:** dry-runs an 8% frame sample and reports "~X% kept" per file
   in seconds, without writing anything — tune, estimate, repeat, then Run.
+- **Settings file:** Save/Load the advanced knobs as a `dnoise.toml` that the CLI
+  reads too (same schema); or drag a `.toml` onto the window to load it.
 - **Run:** processes the queue on a worker thread with a per-file progress bar and a
-  log pane. *Cancel* stops after the current file.
+  log pane. *Cancel* stops the current file mid-way and removes its partial output.
 
 Everything runs through the same `dnoise::denoise_with_options` path as the CLI.
 
+## Downloads
+
+Pre-built binaries for Linux, macOS, and Windows are attached to each tagged
+[release](https://github.com/pgarrett-scripps/dnoise/releases) (built by
+`.github/workflows/release.yml`). Each archive contains both `dnoise` (CLI) and
+`dnoise-gui`. The binaries are currently **unsigned**, so first launch may need an
+OS "allow anyway" step (Windows SmartScreen / macOS Gatekeeper).
+
 ## Roadmap (not yet implemented)
 
-- **TOML config load & save**, shared with the CLI (needs the config struct lifted
-  into the library).
 - **Native OS file pickers** (behind a platform-gated `rfd` dependency; drag-and-drop
   and path entry cover input for now).
-- **Mid-run cancellation** (needs a cooperative abort hook in the library) and a
-  before/after **frame preview** heatmap.
-- **Packaging:** signed Windows `.exe`, macOS `.app`/dmg, Linux AppImage via CI.
+- A before/after **frame preview** heatmap.
+- **Signed** installers: Windows `.exe`, macOS `.app`/dmg, Linux AppImage.

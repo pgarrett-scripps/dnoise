@@ -605,8 +605,11 @@ fn main() -> Result<()> {
     // MS1 selection-polygon gate (off by default): drop MS1 points outside the
     // run's IMS PolygonFilter. CLI > config > default for the pads. Auto-detects
     // polygon presence (no-op otherwise).
-    let ms1_polygon_enabled =
-        cli.ms1_polygon || cfg.ms1_polygon.or(preset_gates.ms1_polygon).unwrap_or(false);
+    let ms1_polygon_enabled = cli.ms1_polygon
+        || cfg
+            .ms1_polygon
+            .or(preset_gates.ms1_polygon)
+            .unwrap_or(false);
     let d = Ms1PolygonParams::default();
     let ms1_polygon = Ms1PolygonParams {
         mz_pad: pick!(cli.ms1_polygon_mz_pad, cfg.ms1_polygon_mz_pad, d.mz_pad),
@@ -748,23 +751,24 @@ fn main() -> Result<()> {
     }
     let start = Instant::now();
     let mut last_decile = 0u64;
-    let result = dnoise::denoise_with_options(&cli.input, &out_path, &params, &stages, &options, |p| {
-        pb.set_length(p.frames_total as u64);
-        pb.set_position(p.frames_done as u64);
-        if !interactive && p.frames_total > 0 {
-            let pct = 100 * p.frames_done as u64 / p.frames_total as u64;
-            let decile = pct - pct % 10;
-            if decile > last_decile {
-                last_decile = decile;
-                info!(
-                    frames_done = p.frames_done,
-                    frames_total = p.frames_total,
-                    pct,
-                    "denoise: progress"
-                );
+    let result =
+        dnoise::denoise_with_options(&cli.input, &out_path, &params, &stages, &options, |p| {
+            pb.set_length(p.frames_total as u64);
+            pb.set_position(p.frames_done as u64);
+            if !interactive && p.frames_total > 0 {
+                let pct = 100 * p.frames_done as u64 / p.frames_total as u64;
+                let decile = pct - pct % 10;
+                if decile > last_decile {
+                    last_decile = decile;
+                    info!(
+                        frames_done = p.frames_done,
+                        frames_total = p.frames_total,
+                        pct,
+                        "denoise: progress"
+                    );
+                }
             }
-        }
-    });
+        });
     pb.finish_and_clear();
     // In-place mode owns the temp sibling folder, so clean up a partial one on
     // failure rather than leaving it behind for the next run to clobber.
