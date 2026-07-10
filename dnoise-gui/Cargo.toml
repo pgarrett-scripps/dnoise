@@ -1,0 +1,20 @@
+[package]
+name = "dnoise-gui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Patrick Garrett <pgarrett@scripps.edu>"]
+description = "Desktop GUI for dnoise: denoise/trim Bruker timsTOF .d folders without the command line."
+repository = "https://github.com/pgarrett-scripps/dnoise"
+license = "MIT"
+publish = false
+
+[dependencies]
+# The denoiser itself, linked in-process (library only — no CLI deps pulled in).
+dnoise = { path = "..", default-features = false }
+# Immediate-mode GUI + native window/event loop. Drag-and-drop and path entry
+# handle input, so no native file-dialog crate (rfd/GTK) is needed yet — native
+# OS pickers are a Phase 2 addition behind a platform-gated dependency.
+eframe = "0.31"
+# Minimal JSON for the optional per-run report.
+serde_json = "1.0"

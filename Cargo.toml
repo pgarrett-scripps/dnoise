@@ -1,3 +1,7 @@
+[workspace]
+members = ["dnoise-gui"]
+resolver = "2"
+
 [package]
 name = "dnoise"
 version = "0.1.0"
@@ -12,7 +16,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["mass-spectrometry", "proteomics", "timstof", "denoising", "bruker"]
 categories = ["science", "command-line-utilities"]
-exclude = ["/benchmark", "/tools", "/.github"]
+exclude = ["/benchmark", "/tools", "/.github", "/dnoise-gui"]
 
 [package.metadata.docs.rs]
 all-features = true
