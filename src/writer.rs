@@ -1105,3 +1105,186 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// The run's `.d` calibration, exposed so an in-process caller can turn the
+/// integer `(scan, tof_idx)` of a [`DecodedFrame`]'s survivors into physical
+/// `(1/K0, m/z)` without re-opening the metadata. Thin wrapper over the same
+/// timsrust converters `dnoise` already reads internally.
+pub struct Calibration {
+    tof2mz: timsrust::converters::Tof2MzConverter,
+    scan2im: timsrust::converters::Scan2ImConverter,
+}
+
+impl Calibration {
+    /// Convert a TOF index to m/z (Da).
+    pub fn tof_to_mz(&self, tof: u32) -> f64 {
+        self.tof2mz.convert(tof as f64)
+    }
+
+    /// Convert a scan index to ion mobility (`1/K0`).
+    pub fn scan_to_im(&self, scan: u32) -> f64 {
+        self.scan2im.convert(scan as f64)
+    }
+}
+
+/// In-process streaming denoiser: open a `.d` once, build the run's gates, and
+/// hand back each frame's surviving points via [`RunContext::process`] — the
+/// exact stage code the standalone tool runs (both go through
+/// [`process_frame_decoded`]), with no rewritten `.d` on disk.
+///
+/// The caller drives parallelism, e.g.
+/// ```ignore
+/// let ctx = RunContext::open(input, &params, &stages)?;
+/// let frames: Vec<_> = (0..ctx.len())
+///     .into_par_iter()
+///     .filter(|&i| ctx.is_ms1(i))
+///     .map(|i| ctx.process(i))
+///     .collect::<Result<_>>()?;
+/// ```
+///
+/// This is the non-crop, non-dry-run path (crop/RT-crop belong to the file
+/// writer). The per-run gate wiring mirrors [`run`]; the [`streaming_matches_writer`]
+/// test asserts the two never diverge on a real `.d`.
+pub struct RunContext<'a> {
+    reader: FrameReader,
+    meta: Vec<tdf::FrameMeta>,
+    params: FilterParams,
+    stages: Stages<'a>,
+    msms_keep: Option<MsmsKeep>,
+    dia_msms: Option<&'a MsmsFilterParams>,
+    dia_windows: Option<DiaWindows>,
+    dia_ms1_gate: Option<DiaMs1Gate>,
+    polygon_gate: Option<PolygonGate>,
+    rt_keep: Vec<bool>,
+    ms1_indices: Vec<usize>,
+    ms1_pos: Vec<Option<usize>>,
+    calibration: Calibration,
+    n_ms1: usize,
+}
+
+impl<'a> RunContext<'a> {
+    /// Open the `.d` and build every per-run gate once. `params` and `stages`
+    /// must outlive the context (the DIA MS/MS params are borrowed from `stages`).
+    pub fn open(input: &Path, params: &FilterParams, stages: &'a Stages<'a>) -> Result<Self> {
+        let in_tdf = input.join("analysis.tdf");
+        let in_bin = input.join("analysis.tdf_bin");
+        if !in_tdf.is_file() || !in_bin.is_file() {
+            return Err(DnoiseError::NotADotD(input.to_path_buf()));
+        }
+
+        let reader =
+            FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
+        let meta = tdf::read_frame_meta(&in_tdf)?;
+        let n_frames = meta.len();
+        let n_ms1 = meta.iter().filter(|m| m.is_ms1()).count();
+
+        // MS1 stream index maps for the cross-frame combine (mirrors `run`).
+        let ms1_indices: Vec<usize> = (0..n_frames).filter(|&i| meta[i].is_ms1()).collect();
+        let mut ms1_pos: Vec<Option<usize>> = vec![None; n_frames];
+        for (p, &gi) in ms1_indices.iter().enumerate() {
+            ms1_pos[gi] = Some(p);
+        }
+
+        // MS/MS denoise: ddaPASEF per-precursor keep sets vs diaPASEF whole-frame.
+        let (msms_keep, dia_msms) = match stages.denoise_msms {
+            Some(mp) => {
+                let windows = tdf::read_pasef_msms(&in_tdf)?;
+                if windows.is_empty() {
+                    (None, Some(mp))
+                } else {
+                    let keep = build_msms_keep(&reader, &meta, &windows, mp, stages.halo)?;
+                    (Some(keep), None)
+                }
+            }
+            None => (None, None),
+        };
+
+        // diaPASEF isolation windows, shared by the out-of-window gate and per-window
+        // MS/MS filtering. Empty for ddaPASEF, so both features no-op there.
+        let dia_windows = if stages.dia_window.is_some() || stages.dia_per_window {
+            let w = tdf::read_dia_windows(&in_tdf)?;
+            if w.is_empty() { None } else { Some(w) }
+        } else {
+            None
+        };
+
+        let dia_ms1_gate = match stages.dia_ms1 {
+            Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta)?,
+            None => None,
+        };
+        let polygon_gate = match stages.ms1_polygon {
+            Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
+            None => None,
+        };
+
+        // No crop on the streaming path: every frame is in the RT window.
+        let rt_keep = vec![true; n_frames];
+
+        let md =
+            MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
+        let calibration = Calibration {
+            tof2mz: md.mz_converter,
+            scan2im: md.im_converter,
+        };
+
+        Ok(RunContext {
+            reader,
+            meta,
+            params: *params,
+            stages: *stages,
+            msms_keep,
+            dia_msms,
+            dia_windows,
+            dia_ms1_gate,
+            polygon_gate,
+            rt_keep,
+            ms1_indices,
+            ms1_pos,
+            calibration,
+            n_ms1,
+        })
+    }
+
+    /// Total frame count (MS1 + MS/MS), the valid range for [`Self::process`].
+    pub fn len(&self) -> usize {
+        self.meta.len()
+    }
+
+    /// True when the context holds no frames.
+    pub fn is_empty(&self) -> bool {
+        self.meta.is_empty()
+    }
+
+    /// Number of MS1 frames.
+    pub fn ms1_frames(&self) -> usize {
+        self.n_ms1
+    }
+
+    /// True when frame `i` is an MS1 frame.
+    pub fn is_ms1(&self, i: usize) -> bool {
+        self.meta[i].is_ms1()
+    }
+
+    /// The run's calibration, for converting survivor `(scan, tof)` to `(1/K0, m/z)`.
+    pub fn calibration(&self) -> &Calibration {
+        &self.calibration
+    }
+
+    /// Decode frame `i` through every enabled stage and return its survivors.
+    /// Safe to call concurrently across frames (`&self`).
+    pub fn process(&self, i: usize) -> Result<DecodedFrame> {
+        let ctx = FrameCtx {
+            msms: self.msms_keep.as_ref(),
+            dia_msms: self.dia_msms,
+            dia_windows: self.dia_windows.as_ref(),
+            dia_ms1: self.dia_ms1_gate.as_ref(),
+            polygon: self.polygon_gate.as_ref(),
+            crop: None,
+            crop_only: false,
+            rt_keep: &self.rt_keep,
+            ms1_indices: &self.ms1_indices,
+            ms1_pos: &self.ms1_pos,
+        };
+        process_frame_decoded(&self.reader, &self.meta, i, &self.params, &self.stages, &ctx)
+    }
+}

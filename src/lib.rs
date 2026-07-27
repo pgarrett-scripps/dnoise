@@ -60,8 +60,8 @@ pub use params::{
     Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
 };
 pub use writer::{
-    DecodedFrame, DenoiseStats, FrameCtx, Progress, RunOptions, SampleSpec, denoise,
-    denoise_with_options, denoise_with_progress, process_frame_decoded,
+    Calibration, DecodedFrame, DenoiseStats, FrameCtx, Progress, RunContext, RunOptions,
+    SampleSpec, denoise, denoise_with_options, denoise_with_progress, process_frame_decoded,
 };
 
 // Low-level building blocks.
