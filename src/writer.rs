@@ -565,7 +565,7 @@ struct ProcessedFrame {
 /// Per-run context for [`process_frame`]: the MS/MS keep sets and gates built
 /// once in [`run`], plus the crop and the MS1-stream index maps. Lets the
 /// per-frame worker take the run's derived state as a single value.
-struct FrameCtx<'a> {
+pub struct FrameCtx<'a> {
     /// ddaPASEF per-precursor keep sets (`None` unless MS/MS denoising on ddaPASEF).
     msms: Option<&'a MsmsKeep>,
     /// diaPASEF MS/MS filter knobs (`None` unless MS/MS denoising on diaPASEF).
@@ -588,6 +588,42 @@ struct FrameCtx<'a> {
     ms1_pos: &'a [Option<usize>],
 }
 
+/// A frame after every denoising / crop stage has run, but *before* it is
+/// re-encoded into a `.d` record. This is the unit the streaming API
+/// ([`crate::RunContext`]) hands to in-process callers that want the surviving
+/// points directly (e.g. a feature finder) instead of a rewritten `.d` on disk.
+/// [`process_frame`] wraps this with the type-2 encoder to write the file.
+pub struct DecodedFrame {
+    /// Bruker frame `Id` (== timsrust frame index).
+    pub frame_id: usize,
+    /// True for MS1 frames.
+    pub is_ms1: bool,
+    /// Scan count for this frame (encode size; also maps scan -> mobility).
+    pub num_scans: usize,
+    /// Retention time in **seconds** (`Frames.Time`).
+    pub rt_seconds: f64,
+    /// Surviving points as integer `(scan, tof_idx, intensity)`, after every
+    /// enabled stage (vertical filter, halo, gates, smoothing, centroiding).
+    pub survivors: Vec<(u32, u32, u32)>,
+    /// Input point count before filtering. For frames emitted empty without
+    /// decoding (empty payload, RT-cropped) this is the `NumPeaks`/0 the writer
+    /// reported, so a reduction stat still reflects them.
+    pub raw_points: u64,
+    /// Summed input intensity (0 for frames emitted empty without decoding).
+    pub raw_summed: u64,
+    /// True when this frame was emptied by the retention-time crop.
+    pub cropped: bool,
+    /// Re-encode as the canonical *empty* record rather than the survivor
+    /// encoder. Set for frames with no payload and for RT-cropped frames, which
+    /// the pre-streaming writer encoded via `encode_empty_frame_type2`; keeping
+    /// the distinction makes [`process_frame`] byte-identical to that writer.
+    empty_record: bool,
+}
+
+/// Thin file-writer wrapper over [`process_frame_decoded`]: decode the frame's
+/// survivors, then encode them into a `.d` type-2 record plus the per-frame stats
+/// the run's metadata fixup needs. Behaviour-identical to the pre-streaming
+/// implementation (proven by the byte-identity test in `tests/`).
 fn process_frame(
     reader: &FrameReader,
     meta: &[tdf::FrameMeta],
@@ -596,6 +632,41 @@ fn process_frame(
     stages: &Stages,
     ctx: &FrameCtx,
 ) -> Result<ProcessedFrame> {
+    let d = process_frame_decoded(reader, meta, i, params, stages, ctx)?;
+    let num_peaks = d.survivors.len() as u64;
+    let summed_intensities: u64 = d.survivors.iter().map(|&(_, _, it)| it as u64).sum();
+    let max_intensity = d.survivors.iter().map(|&(_, _, it)| it).max().unwrap_or(0);
+    let record = if d.empty_record {
+        crate::codec::encode_empty_frame_type2(d.num_scans)
+    } else {
+        encode_frame_type2(d.num_scans, &d.survivors)
+    };
+    Ok(ProcessedFrame {
+        frame_id: d.frame_id,
+        record,
+        raw_points: d.raw_points,
+        num_peaks,
+        max_intensity,
+        summed_intensities,
+        raw_summed: d.raw_summed,
+        is_ms1: d.is_ms1,
+        cropped: d.cropped,
+    })
+}
+
+/// Decode one frame through every enabled denoising / crop stage and return its
+/// surviving points, without touching the output `.d`. This is the shared core
+/// behind both the file writer ([`process_frame`]) and the streaming API
+/// ([`crate::RunContext::process`]) — a single implementation, so an in-process
+/// caller can never drift from the standalone tool.
+pub fn process_frame_decoded(
+    reader: &FrameReader,
+    meta: &[tdf::FrameMeta],
+    i: usize,
+    params: &FilterParams,
+    stages: &Stages,
+    ctx: &FrameCtx,
+) -> Result<DecodedFrame> {
     // The stages that act per frame; the polygon/dia_ms1/denoise_msms knobs were
     // already consumed into the gates and keep sets held by `ctx`.
     let &Stages {
@@ -626,16 +697,16 @@ fn process_frame(
     // Empty frames: timsrust cannot decode their absent payload, so emit the
     // canonical empty record directly (Bruker stores these too).
     if meta_i.num_peaks == 0 {
-        return Ok(ProcessedFrame {
+        return Ok(DecodedFrame {
             frame_id: meta_i.id,
-            record: crate::codec::encode_empty_frame_type2(meta_i.num_scans),
-            raw_points: 0,
-            num_peaks: 0,
-            max_intensity: 0,
-            summed_intensities: 0,
-            raw_summed: 0,
             is_ms1,
+            num_scans: meta_i.num_scans,
+            rt_seconds: meta_i.rt,
+            survivors: Vec::new(),
+            raw_points: 0,
+            raw_summed: 0,
             cropped: false,
+            empty_record: true,
         });
     }
 
@@ -643,16 +714,16 @@ fn process_frame(
     // decoding its payload. Its input points still count toward the raw total (from
     // `NumPeaks`) so the reported reduction reflects the crop.
     if !rt_keep[i] {
-        return Ok(ProcessedFrame {
+        return Ok(DecodedFrame {
             frame_id: meta_i.id,
-            record: crate::codec::encode_empty_frame_type2(meta_i.num_scans),
-            raw_points: meta_i.num_peaks,
-            num_peaks: 0,
-            max_intensity: 0,
-            summed_intensities: 0,
-            raw_summed: 0,
             is_ms1,
+            num_scans: meta_i.num_scans,
+            rt_seconds: meta_i.rt,
+            survivors: Vec::new(),
+            raw_points: meta_i.num_peaks,
+            raw_summed: 0,
             cropped: true,
+            empty_record: true,
         });
     }
 
@@ -831,21 +902,16 @@ fn process_frame(
         _ => survivors,
     };
 
-    let num_peaks = survivors.len() as u64;
-    let summed_intensities: u64 = survivors.iter().map(|&(_, _, it)| it as u64).sum();
-    let max_intensity = survivors.iter().map(|&(_, _, it)| it).max().unwrap_or(0);
-    let record = encode_frame_type2(num_scans, &survivors);
-
-    Ok(ProcessedFrame {
+    Ok(DecodedFrame {
         frame_id,
-        record,
-        raw_points,
-        num_peaks,
-        max_intensity,
-        summed_intensities,
-        raw_summed,
         is_ms1,
+        num_scans,
+        rt_seconds: meta_i.rt,
+        survivors,
+        raw_points,
+        raw_summed,
         cropped: false,
+        empty_record: false,
     })
 }
 
