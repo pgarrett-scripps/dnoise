@@ -7,9 +7,11 @@
 # benchmark third-party tools and build artifacts (prebuilt binaries, tarballs, Rust target)
 /benchmark/tools/
 
-# Python caches
+# Python caches and virtualenvs
 __pycache__/
 *.pyc
+.venv/
+venv/
 
 # scratch and run logs
 /tmp/
