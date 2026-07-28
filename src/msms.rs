@@ -191,3 +191,88 @@ pub(crate) fn build_msms_keep(
         frame_windows,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vertical_params() -> FilterParams {
+        FilterParams {
+            mz_half_width: 0,
+            min_feature_length: 3,
+            max_internal_gap: 0,
+            min_window_intensity: 0,
+            min_feature_intensity: 0,
+            num_iterations: 1,
+        }
+    }
+
+    #[test]
+    fn combine_and_filter_empty_input_is_empty() {
+        assert!(combine_and_filter(&[], 0, 10, &vertical_params(), None).is_empty());
+    }
+
+    #[test]
+    fn combine_and_filter_zero_local_scans_is_empty() {
+        let pts = [(5, 100, 10)];
+        assert!(combine_and_filter(&pts, 5, 0, &vertical_params(), None).is_empty());
+    }
+
+    #[test]
+    fn combine_and_filter_keeps_a_vertical_streak_in_absolute_coords() {
+        // One TOF column occupied across 10 consecutive scans starting at absolute
+        // scan 10 -> a run of length 10 >= min_feature_length, so it survives.
+        let pts: Vec<(u32, u32, u32)> = (10..20).map(|s| (s, 500, 100)).collect();
+        let out = combine_and_filter(&pts, 10, 10, &vertical_params(), None);
+        assert!(!out.is_empty());
+        // Keys are packed in absolute scan coordinates.
+        assert!(out.contains(&(((10u64) << 32) | 500)));
+        assert!(out.contains(&(((19u64) << 32) | 500)));
+    }
+
+    #[test]
+    fn combine_and_filter_drops_an_isolated_point() {
+        // A single occupied scan is shorter than min_feature_length -> dropped.
+        let pts = [(12, 500, 100)];
+        assert!(combine_and_filter(&pts, 10, 10, &vertical_params(), None).is_empty());
+    }
+
+    #[test]
+    fn keep_mask_passes_all_points_when_frame_has_no_windows() {
+        let mk = MsmsKeep {
+            keep: vec![HashSet::new()],
+            frame_windows: HashMap::new(),
+        };
+        let frame = FlatFrame {
+            frame_id: 3,
+            num_scans: 5,
+            scan: vec![0, 1, 2],
+            tof: vec![10, 20, 30],
+            intensity: vec![1, 1, 1],
+        };
+        assert_eq!(mk.keep_mask(&frame, 3), vec![true, true, true]);
+    }
+
+    #[test]
+    fn keep_mask_prunes_in_window_points_by_precursor_keep_set() {
+        // Frame 3 has one isolation window [scan 0, 2) belonging to precursor 1,
+        // whose keep set contains only (scan 0, tof 10).
+        let mut frame_windows = HashMap::new();
+        frame_windows.insert(3usize, vec![(0u32, 2u32, 1u32)]);
+        let mut prec1 = HashSet::new();
+        prec1.insert(key(0, 10));
+        let mk = MsmsKeep {
+            keep: vec![HashSet::new(), prec1],
+            frame_windows,
+        };
+        let frame = FlatFrame {
+            frame_id: 3,
+            num_scans: 5,
+            scan: vec![0, 1, 3],
+            tof: vec![10, 20, 30],
+            intensity: vec![1, 1, 1],
+        };
+        // (0,10) in-window & kept; (1,20) in-window & not kept; (3,30) outside window.
+        assert_eq!(mk.keep_mask(&frame, 3), vec![true, false, true]);
+    }
+}

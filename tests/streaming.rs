@@ -33,13 +33,18 @@ fn flat_points(flat: &FlatFrame) -> Vec<(u32, u32, u32)> {
         .collect()
 }
 
+// Ignored by default so a missing fixture shows up as an *ignored* test rather
+// than a passing no-op. Run it with the fixture via:
+//   DNOISE_PARITY_DOTD=/path/to/example.d cargo test --test streaming -- --ignored
 #[test]
+#[ignore = "requires DNOISE_PARITY_DOTD pointing at a real .d"]
 fn streaming_matches_writer() {
-    let Ok(input) = std::env::var("DNOISE_PARITY_DOTD") else {
-        eprintln!("DNOISE_PARITY_DOTD unset — skipping streaming parity test");
-        return;
+    let input = match std::env::var("DNOISE_PARITY_DOTD") {
+        Ok(p) => PathBuf::from(p),
+        Err(_) => panic!(
+            "DNOISE_PARITY_DOTD unset — set it to a real .d to run the writer/streaming parity test"
+        ),
     };
-    let input = PathBuf::from(input);
 
     // Default denoising (vertical filter + halo on MS1). No crop, so the writer's
     // output frames line up 1:1 with RunContext frames.

@@ -288,6 +288,128 @@ impl CropParams {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The defaults are load-bearing: they encode the tuned PXD070049 benchmark
+    // configuration, and nothing else in the test suite would catch a silent drift.
+    #[test]
+    fn filter_defaults_match_tuned_benchmark() {
+        let p = FilterParams::default();
+        assert_eq!(p.mz_half_width, 3);
+        assert_eq!(p.min_feature_length, 5);
+        assert_eq!(p.max_internal_gap, 2);
+        assert_eq!(p.min_window_intensity, 0);
+        assert_eq!(p.min_feature_intensity, 0);
+        assert_eq!(p.num_iterations, 2);
+    }
+
+    #[test]
+    fn halo_smooth_watershed_defaults() {
+        let h = HaloParams::default();
+        assert_eq!(h.peak_fraction, 0.15);
+        assert_eq!(h.mz_idx_half_width, 80);
+        assert_eq!(h.scan_half_width, 2);
+
+        let s = SmoothParams::default();
+        assert_eq!(s.mz_idx_half_width, 2);
+        assert_eq!(s.scan_half_width, 3);
+        assert_eq!(s.iterations, 1);
+
+        let w = WatershedParams::default();
+        assert_eq!(w.box_scan, 10);
+        assert_eq!(w.box_mz_idx, 3);
+        assert_eq!(w.max_tof_offset, 10);
+    }
+
+    #[test]
+    fn dia_ms1_defaults_are_physical_pads() {
+        let d = DiaMs1WindowParams::default();
+        assert_eq!(d.mz_pad, 5.0);
+        assert_eq!(d.im_pad, 0.05);
+    }
+
+    #[test]
+    fn msms_defaults_use_a_shorter_feature_length_than_ms1() {
+        // Tuned for the short (~25-scan) precursor isolation windows.
+        let m = MsmsFilterParams::default();
+        assert_eq!(m.min_feature_length, 2);
+        assert_eq!(m.max_internal_gap, 5);
+        assert_eq!(m.num_iterations, 1);
+        assert!(m.min_feature_length < FilterParams::default().min_feature_length);
+    }
+
+    #[test]
+    fn msms_as_filter_params_preserves_every_knob() {
+        let m = MsmsFilterParams {
+            mz_half_width: 7,
+            min_feature_length: 4,
+            max_internal_gap: 9,
+            min_window_intensity: 11,
+            min_feature_intensity: 13,
+            num_iterations: 3,
+        };
+        let f = m.as_filter_params();
+        assert_eq!(f.mz_half_width, m.mz_half_width);
+        assert_eq!(f.min_feature_length, m.min_feature_length);
+        assert_eq!(f.max_internal_gap, m.max_internal_gap);
+        assert_eq!(f.min_window_intensity, m.min_window_intensity);
+        assert_eq!(f.min_feature_intensity, m.min_feature_intensity);
+        assert_eq!(f.num_iterations, m.num_iterations);
+    }
+
+    #[test]
+    fn crop_default_is_empty_with_no_rt() {
+        let c = CropParams::default();
+        assert!(c.is_empty());
+        assert!(!c.has_rt());
+    }
+
+    #[test]
+    fn crop_with_a_non_rt_bound_is_not_empty_but_has_no_rt() {
+        let c = CropParams {
+            mz_min: Some(400.0),
+            ..CropParams::default()
+        };
+        assert!(!c.is_empty());
+        assert!(!c.has_rt());
+    }
+
+    #[test]
+    fn crop_has_rt_detects_either_bound() {
+        assert!(
+            CropParams {
+                rt_min: Some(1.0),
+                ..Default::default()
+            }
+            .has_rt()
+        );
+        let hi = CropParams {
+            rt_max: Some(9.0),
+            ..Default::default()
+        };
+        assert!(hi.has_rt());
+        assert!(!hi.is_empty());
+    }
+
+    #[test]
+    fn stages_default_is_every_stage_off() {
+        let s = Stages::default();
+        assert!(!s.filter_all_frames);
+        assert_eq!(s.frame_half_width, 0);
+        assert!(s.halo.is_none());
+        assert!(s.denoise_msms.is_none());
+        assert!(s.smooth.is_none());
+        assert!(s.watershed.is_none());
+        assert!(s.box_centroid.is_none());
+        assert!(s.dia_window.is_none());
+        assert!(!s.dia_per_window);
+        assert!(s.dia_ms1.is_none());
+        assert!(s.ms1_polygon.is_none());
+    }
+}
+
 /// Optional pipeline stages layered on top of the core vertical-IM filter
 /// ([`FilterParams`]), passed as one value to [`crate::denoise`] and
 /// [`crate::denoise_with_progress`] instead of a dozen positional arguments.
