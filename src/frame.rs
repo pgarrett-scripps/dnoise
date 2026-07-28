@@ -57,3 +57,71 @@ impl FlatFrame {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(scan: Vec<u32>, tof: Vec<u32>, intensity: Vec<u32>) -> FlatFrame {
+        FlatFrame {
+            frame_id: 0,
+            num_scans: 4,
+            scan,
+            tof,
+            intensity,
+        }
+    }
+
+    #[test]
+    fn len_and_is_empty() {
+        assert_eq!(frame(vec![], vec![], vec![]).len(), 0);
+        assert!(frame(vec![], vec![], vec![]).is_empty());
+
+        let g = frame(vec![0, 1], vec![10, 20], vec![1, 2]);
+        assert_eq!(g.len(), 2);
+        assert!(!g.is_empty());
+    }
+
+    #[test]
+    fn survivors_selects_kept_points_in_order() {
+        let f = frame(vec![0, 1, 2], vec![100, 200, 300], vec![5, 6, 7]);
+        assert_eq!(f.survivors(&[true, false, true]), vec![(0, 100, 5), (2, 300, 7)]);
+    }
+
+    #[test]
+    fn survivors_empty_when_nothing_kept() {
+        let f = frame(vec![0], vec![1], vec![1]);
+        assert!(f.survivors(&[false]).is_empty());
+    }
+
+    #[test]
+    fn from_frame_expands_csr_offsets_into_per_point_scans() {
+        // `scan_offsets` is a CSR row pointer over 3 scans: scan 0 has two points,
+        // scan 1 has none, scan 2 has one.
+        let src = timsrust::Frame {
+            scan_offsets: vec![0, 2, 2, 3],
+            tof_indices: vec![10, 11, 12],
+            intensities: vec![100, 101, 102],
+            index: 7,
+            ..Default::default()
+        };
+        let flat = FlatFrame::from_frame(&src);
+        assert_eq!(flat.frame_id, 7);
+        assert_eq!(flat.num_scans, 3);
+        assert_eq!(flat.scan, vec![0, 0, 2]);
+        assert_eq!(flat.tof, vec![10, 11, 12]);
+        assert_eq!(flat.intensity, vec![100, 101, 102]);
+        assert_eq!(flat.len(), 3);
+    }
+
+    #[test]
+    fn from_frame_handles_an_empty_frame() {
+        let src = timsrust::Frame {
+            scan_offsets: vec![0, 0, 0],
+            ..Default::default()
+        };
+        let flat = FlatFrame::from_frame(&src);
+        assert_eq!(flat.num_scans, 2);
+        assert!(flat.is_empty());
+    }
+}

@@ -1288,3 +1288,69 @@ impl<'a> RunContext<'a> {
         process_frame_decoded(&self.reader, &self.meta, i, &self.params, &self.stages, &ctx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_sampled_fraction_one_keeps_every_frame() {
+        assert!((0..1000).all(|i| frame_sampled(i, 42, 1.0)));
+    }
+
+    #[test]
+    fn frame_sampled_fraction_zero_keeps_essentially_none() {
+        let kept = (0..1000).filter(|&i| frame_sampled(i, 42, 0.0)).count();
+        assert!(kept <= 1, "expected ~0 kept at fraction 0.0, got {kept}");
+    }
+
+    #[test]
+    fn frame_sampled_is_deterministic() {
+        assert!((0..500).all(|i| frame_sampled(i, 7, 0.5) == frame_sampled(i, 7, 0.5)));
+    }
+
+    #[test]
+    fn frame_sampled_roughly_matches_the_requested_fraction() {
+        let n = 20_000;
+        let kept = (0..n).filter(|&i| frame_sampled(i, 123, 0.25)).count();
+        let frac = kept as f64 / n as f64;
+        // Loose band around 0.25; the SplitMix hash is well-distributed.
+        assert!((0.22..0.28).contains(&frac), "fraction {frac} out of band");
+    }
+
+    #[test]
+    fn denoise_stats_default_is_zeroed() {
+        let s = DenoiseStats::default();
+        assert_eq!(s.frames, 0);
+        assert_eq!(s.raw_points, 0);
+        assert_eq!(s.kept_points, 0);
+        assert!(!s.dry_run);
+    }
+
+    #[test]
+    fn copy_dir_except_skips_named_top_level_entry_and_recurses() {
+        let base = std::env::temp_dir().join(format!(
+            "dnoise_copy_except_{}_{}",
+            std::process::id(),
+            "writer"
+        ));
+        let src = base.join("src");
+        let dst = base.join("dst");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("keep.txt"), b"a").unwrap();
+        fs::write(src.join("analysis.tdf_bin"), b"skip me").unwrap();
+        fs::write(src.join("sub").join("nested.txt"), b"b").unwrap();
+
+        copy_dir_except(&src, &dst, "analysis.tdf_bin").unwrap();
+
+        assert!(dst.join("keep.txt").is_file());
+        assert!(dst.join("sub").join("nested.txt").is_file());
+        assert!(
+            !dst.join("analysis.tdf_bin").exists(),
+            "the skipped top-level entry must not be copied"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+}
