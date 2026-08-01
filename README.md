@@ -183,8 +183,7 @@ so binary offsets stay consistent.
 > Excluding the own column means the vertical streak above/below a peak never
 > counts against it — only genuine left/right neighbors do. It works in integer
 > `(scan, TOF index)` space (no calibration) and keeps/drops native points (no
-> smoothing). Ported from `tdfpy`'s `HorizontalHaloFilter`; disable with
-> `--no-halo`.
+> smoothing). Disable with `--no-halo`.
 
 > **`--frame-half-width` is experimental.** It replaces each MS1 frame with the
 > centered running average of its `2r+1` MS1-frame neighborhood before
@@ -322,15 +321,17 @@ iteration monotonicity; `tests/average.rs` covers the running-average pre-pass.
 
 ## Reproducing the paper
 
-The benchmark suite, manuscript, and Supporting Information that accompany the
-dnoise paper live under [`benchmark/`](benchmark/) and [`paper/`](paper/). The
-exact state used for the paper is frozen on the [`paper`](../../tree/paper)
-branch, so every figure, table, and PDF can be regenerated as published while
-`main` tracks ongoing development. Start from
-[`benchmark/README.md`](benchmark/README.md), which lists, in order, the commands
-that rebuild each manuscript asset from the raw `.d` files (PRIDE
-[PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)). Rust deps
-are pinned in `Cargo.lock`; the Python analysis env is pinned in
+The manuscript, its Supporting Information, and the exact code and configuration
+they describe live on the [`paper`](../../tree/paper) branch, not here. That
+branch is frozen, so every figure, table, and PDF can be regenerated as
+published, while `main` tracks ongoing development and its defaults may move.
+Start from that branch's `benchmark/README.md`, which lists, in order, the
+commands that rebuild each manuscript asset from the raw `.d` files (PRIDE
+[PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)).
+
+The benchmark suite is also kept here under [`benchmark/`](benchmark/), where it
+follows `main`; use the `paper` branch's copy to reproduce published numbers.
+Rust deps are pinned in `Cargo.lock`; the Python analysis env is pinned in
 `benchmark/pyproject.toml` + `benchmark/uv.lock` (run via `uv`).
 
 ## License

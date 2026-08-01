@@ -13,8 +13,7 @@
 //! peak's own m/z column** — and drops the peak when its intensity falls below
 //! `peak_fraction` of that reference. Excluding the own column is what keeps the
 //! vertical streak from ever counting against a point. Operates entirely in
-//! integer `(scan, TOF index)` space — no calibration. Ported from `tdfpy`'s
-//! `HorizontalHaloFilter`.
+//! integer `(scan, TOF index)` space — no calibration.
 
 use crate::params::HaloParams;
 

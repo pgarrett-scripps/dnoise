@@ -54,8 +54,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `horizontal_halo_keep_mask`): removes the weak m/z halo flanking bright ions
   (left/right only) by comparing each peak to the max of its surrounding box
   excluding its own TOF column, in integer `(scan, TOF index)` space. Runs after
-  the vertical filter, **on by default**; disable with `--no-halo`. Ported from
-  `tdfpy`'s `HorizontalHaloFilter`. `denoise`/`denoise_with_progress` gain a
+  the vertical filter, **on by default**; disable with `--no-halo`.
+  `denoise`/`denoise_with_progress` gain a
   `halo: Option<&HaloParams>` argument.
 - Public library API with two tiers: high-level `denoise` /
   `denoise_with_progress`, and low-level `FlatFrame`, `filter_once`,

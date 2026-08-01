@@ -139,8 +139,8 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips_through_a_file() {
-        let path = std::env::temp_dir()
-            .join(format!("dnoise_cfg_roundtrip_{}.toml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("dnoise_cfg_roundtrip_{}.toml", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let c = Config {
             mz_half_width: Some(9),
@@ -156,8 +156,8 @@ mod tests {
 
     #[test]
     fn load_missing_file_is_err() {
-        let path = std::env::temp_dir()
-            .join(format!("dnoise_cfg_absent_{}.toml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("dnoise_cfg_absent_{}.toml", std::process::id()));
         let _ = std::fs::remove_file(&path);
         assert!(Config::load(&path).is_err());
     }

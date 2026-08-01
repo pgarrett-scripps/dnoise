@@ -1172,8 +1172,7 @@ impl<'a> RunContext<'a> {
             return Err(DnoiseError::NotADotD(input.to_path_buf()));
         }
 
-        let reader =
-            FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
+        let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
         let meta = tdf::read_frame_meta(&in_tdf)?;
         let n_frames = meta.len();
         let n_ms1 = meta.iter().filter(|m| m.is_ms1()).count();
@@ -1220,8 +1219,7 @@ impl<'a> RunContext<'a> {
         // No crop on the streaming path: every frame is in the RT window.
         let rt_keep = vec![true; n_frames];
 
-        let md =
-            MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
+        let md = MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
         let calibration = Calibration {
             tof2mz: md.mz_converter,
             scan2im: md.im_converter,
@@ -1285,7 +1283,14 @@ impl<'a> RunContext<'a> {
             ms1_indices: &self.ms1_indices,
             ms1_pos: &self.ms1_pos,
         };
-        process_frame_decoded(&self.reader, &self.meta, i, &self.params, &self.stages, &ctx)
+        process_frame_decoded(
+            &self.reader,
+            &self.meta,
+            i,
+            &self.params,
+            &self.stages,
+            &ctx,
+        )
     }
 }
 

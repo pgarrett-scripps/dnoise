@@ -1,9 +1,9 @@
-# IM Feature Filter Dashboard — Algorithm Report
+# dnoise — Algorithm Report
 
-Comprehensive description of the three-stage pipeline implemented in
-[`im_feature_filter_dashboard.py`](im_feature_filter_dashboard.py). This is a
-**standalone testing app** — not part of the `tdfpy` package — for tuning a
-custom noise filter and centroider on Bruker timsTOF MS1 frames.
+Comprehensive description of the three-stage MS1 pipeline dnoise implements,
+namely the ion-mobility streak filter, the m/z-halo filter, and the optional
+centroiders, on Bruker timsTOF MS1 frames. The authoritative implementation is
+the Rust source in [`src/`](src/); this document is the prose specification.
 
 ---
 
@@ -74,7 +74,7 @@ centroids  [mz, intensity, ook0]
 final centroids displayed
 ```
 
-Each stage is independently togglable in the dashboard. The data flow is
+Each stage is independently togglable. The data flow is
 strictly left-to-right; later stages never feed back into earlier ones.
 
 ---
@@ -124,9 +124,9 @@ index see identical windows, so we evaluate once per unique index):
    indices). Closing gaps gives the IM filter a morphological-close behavior:
    it tolerates short empty patches inside a feature.
 
-5. **Filter by run length**: a run survives if its total span
-   (`last_occupied − first_occupied + 1`, inclusive of internal gaps) is
-   `≥ min_feature_length`.
+5. **Filter by run length**: a run survives if the number of *occupied* scans it
+   contains is `≥ min_feature_length`. Scans bridged by `max_internal_gap` do **not**
+   count toward the length (see `tests/filter.rs::length_counts_occupied_scans_not_gap_inclusive_span`).
 
 6. **Filter by run intensity**: compute total intensity over the span
    (including sub-threshold cells inside internal gaps — they represent real
@@ -140,8 +140,7 @@ Diagnostics returned:
 
 - `feature_span_intensities`: total intensity per run that **cleared
   `min_feature_length`** (before the intensity-floor filter). This feeds the
-  histogram in the dashboard so you can pick `min_feature_intensity`
-  visually.
+  distribution you would inspect to pick `min_feature_intensity`.
 
 ### Iteration
 
@@ -165,8 +164,8 @@ streak — get dropped on pass 2 when those streaks are gone. The mask is
 always composed against the original point order, so downstream stages see
 the same indexing as the raw input.
 
-The per-pass attrition (`raw → p1 → p2 → ...`) is surfaced in the dashboard
-as a one-line caption beneath the metric strip.
+The per-pass attrition (`raw → p1 → p2 → ...`) is reported by the CLI at the
+end of a run.
 
 ### Parameters
 
@@ -174,7 +173,7 @@ as a one-line caption beneath the metric strip.
 |---|---|---|
 | `mz_half_width` | int (TOF idx) | Column half-width: window spans `[c − half_width, c + half_width]` |
 | `max_internal_gap` | int (scans) | Max consecutive empty scans tolerated inside a feature (morphological-close radius) |
-| `min_feature_length` | int (scans) | Minimum total span of a kept run (gap-inclusive) |
+| `min_feature_length` | int (scans) | Minimum number of occupied scans in a kept run (bridged gaps do not count) |
 | `min_window_intensity` | float | Per-scan summed-intensity floor for marking a scan occupied |
 | `min_feature_intensity` | float | Total summed intensity (column window × span) required for a run to be kept |
 | `num_iterations` | int | How many times to re-apply the filter to its own survivors |
@@ -352,7 +351,7 @@ much real signal.
 | `num_followers` | Points attached to an existing group |
 | `num_orphans_dropped` | Points with no in-box neighbor AND below `min_seed_intensity` |
 
-These appear in the dashboard's centroid metric strip.
+These are the metrics reported for each centroider.
 
 ### Parameters
 
@@ -378,10 +377,9 @@ The threshold can be:
 
 - **`absolute`**: a user-provided number.
 - **`mad`** / **`percentile`** / **`histogram`** / **`baseline`** /
-  **`iterative_median`**: data-driven estimators from `tdfpy.noise`.
+  **`iterative_median`**: data-driven estimators computed from the frame.
 
-This is identical to the noise-filter logic used in the main `tdfpy` package
-and gives consistent post-processing across the two centroiders.
+This gives consistent post-processing across the two centroiders.
 
 ---
 
@@ -390,17 +388,22 @@ and gives consistent post-processing across the two centroiders.
 All knobs, by stage, in the order they appear in the sidebar:
 
 ### Stage 1 — Vertical-IM filter
-- `mz_half_width` (default 2)
+- `mz_half_width` (default 3)
 - `min_feature_length` (default 5)
-- `max_internal_gap` (default 1)
+- `max_internal_gap` (default 2)
 - `min_window_intensity` (default 0)
 - `min_feature_intensity` (default 0)
-- `num_iterations` (default 1)
+- `iterations` (default 2)
 
-### Stage 2 — Smoothing
-- `smooth_enabled` (default on)
-- `smooth_box_scan` (default 10)
-- `smooth_box_mz_idx` (default 3)
+### Stage 2 — Smoothing (optional, OFF by default)
+- `smooth` (default off)
+- `smooth_scan_half_width` (default 3)
+- `smooth_mz_idx_half_width` (default 2)
+- `smooth_iterations` (default 1)
+
+> The m/z-halo filter, the acquisition-aware gates (`ms1_polygon`, `dia_ms1_window`,
+> `dia_window`, `dia_per_window`), the box centroider and the MS/MS path are documented
+> in `dnoise.toml` and in the paper's Supporting Information rather than here.
 
 ### Stage 3 — Watershed centroider
 - `box_scan` (default 10)
@@ -461,7 +464,7 @@ dependents.
 - Increase `num_iterations`.
 
 **Symptom: peak-edge clipping**
-- Tighten `max_internal_gap` (default 1). Too-loose gap-closing can extend
+- Tighten `max_internal_gap` (default 2). Too-loose gap-closing can extend
   features past their real boundaries.
 - Widen `mz_half_width` if real peaks span more TOF indices than the column
   window catches.

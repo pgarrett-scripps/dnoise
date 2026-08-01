@@ -37,3 +37,29 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  # Cargo.toml advertises rust-version = "1.85" as the minimum supported
+  # compiler, and nothing checked it: a 2024-edition feature stabilized after
+  # 1.85 could land and break only for the people who trusted that field.
+  # The library alone, because the GUI has its own much newer toolchain floor.
+  msrv:
+    name: MSRV (1.85, library + CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+
+  # What a crate consumer actually gets. `cargo test --workspace` always builds
+  # with default features, so nothing here exercised the library without the CLI
+  # -- and the feature gating is hand-written, so it can and does drift.
+  no-default-features:
+    name: library only (--no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --no-default-features
+      - run: cargo test --no-default-features --lib

@@ -85,7 +85,10 @@ mod tests {
     #[test]
     fn survivors_selects_kept_points_in_order() {
         let f = frame(vec![0, 1, 2], vec![100, 200, 300], vec![5, 6, 7]);
-        assert_eq!(f.survivors(&[true, false, true]), vec![(0, 100, 5), (2, 300, 7)]);
+        assert_eq!(
+            f.survivors(&[true, false, true]),
+            vec![(0, 100, 5), (2, 300, 7)]
+        );
     }
 
     #[test]
