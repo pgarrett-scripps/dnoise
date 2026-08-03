@@ -91,12 +91,9 @@ pub fn box_average(
                     j += 1;
                 }
             }
-            // Round-half-up mean; cnt >= 1 because the box always contains self.
-            next[i] = if cnt > 0 {
-                (sum + cnt / 2) / cnt
-            } else {
-                int_s[i]
-            };
+            // Round-half-up mean; cnt >= 1 because the box always contains self
+            // (checked_div falls back to the point's own intensity if cnt == 0).
+            next[i] = (sum + cnt / 2).checked_div(cnt).unwrap_or(int_s[i]);
         }
         int_s = next;
     }
