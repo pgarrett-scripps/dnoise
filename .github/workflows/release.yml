@@ -1,8 +1,12 @@
 name: Release
 
 # Tag a version (e.g. `git tag v0.1.0 && git push --tags`) to build and attach
-# per-OS binaries (dnoise CLI + dnoise-gui) to the GitHub release. Manual runs
-# build the same artifacts and upload them as workflow artifacts only.
+# per-OS binaries (dnoise CLI + dnoise-gui) to the GitHub release, and publish the
+# `dnoise` crate to crates.io. Manual runs build the same artifacts and upload them
+# as workflow artifacts only (no crates.io publish).
+#
+# The publish job needs a crates.io API token stored as the repository secret
+# CARGO_REGISTRY_TOKEN (cargo reads it from the environment automatically).
 on:
   push:
     tags: ["v*"]
@@ -76,3 +80,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+
+  publish-crate:
+    name: publish dnoise to crates.io
+    # Only on tag pushes, and only after the binaries build cleanly on all targets.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --package dnoise

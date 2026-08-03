@@ -21,16 +21,19 @@ authors:
   - given-names: Patrick
     family-names: Garrett
     email: pgarrett@scripps.edu
+    orcid: "https://orcid.org/0000-0002-8434-9693"
     affiliation: >-
       Department of Chemical Physiology, The Scripps Research Institute,
       La Jolla, CA, USA
   - given-names: Jolene K.
     family-names: Diedrich
+    orcid: "https://orcid.org/0000-0001-6489-4558"
     affiliation: >-
       Multi-Omics Core, The Scripps Research Institute, La Jolla, CA, USA
   - given-names: John R.
     name-suffix: III
     family-names: Yates
+    orcid: "https://orcid.org/0000-0001-5267-1672"
     affiliation: >-
       Department of Chemical Physiology, The Scripps Research Institute,
       La Jolla, CA, USA
@@ -38,7 +41,7 @@ repository-code: "https://github.com/pgarrett-scripps/dnoise"
 url: "https://github.com/pgarrett-scripps/dnoise"
 license: MIT
 version: 0.1.0
-date-released: "2026-08-01"
+date-released: "2026-08-03"
 keywords:
   - mass spectrometry
   - proteomics
