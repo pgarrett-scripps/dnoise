@@ -1,13 +1,19 @@
 # dnoise
 
+[![CI](https://github.com/pgarrett-scripps/dnoise/actions/workflows/ci.yml/badge.svg)](https://github.com/pgarrett-scripps/dnoise/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/dnoise.svg)](https://crates.io/crates/dnoise)
 [![Docs.rs](https://docs.rs/dnoise/badge.svg)](https://docs.rs/dnoise)
 [![License](https://img.shields.io/crates/l/dnoise.svg)](#license)
+<!-- After the first Zenodo release, add the concept-DOI badge here:
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX) -->
+
+
 
 Denoise Bruker timsTOF `.d` folders by reducing the raw 3-D data
 (`scan × TOF-index × intensity`) with the **iterative vertical-IM feature
-filter** (Stage 1 of [ALGORITHM.md](ALGORITHM.md)). Centroiding and smoothing
-are intentionally not implemented.
+filter** (Stage 1 of [ALGORITHM.md](ALGORITHM.md)). Optional later stages —
+intensity smoothing and watershed or greedy small-box centroiding — are
+available but off by default; the vertical filter alone is the core method.
 
 A real ion forms a vertical streak in `(TOF-index × scan)` space. The filter
 walks each TOF index, sums the ion-mobility profile in a small TOF window
@@ -60,8 +66,8 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 | `--min-feature-intensity` | 0 | Total summed-intensity floor for a kept feature. |
 | `--iterations` | 2 | Filter passes (each re-applies to prior survivors). |
 | `--no-halo` | (on) | Disable the horizontal-halo filter, which runs after the vertical filter (see below). |
-| `--halo-peak-fraction` | 0.1 | Drop a peak below this fraction of its off-column box-max. |
-| `--halo-mz-idx-half-width` | 100 | Reference-box half-width along TOF index. |
+| `--halo-peak-fraction` | 0.15 | Drop a peak below this fraction of its off-column box-max. |
+| `--halo-mz-idx-half-width` | 80 | Reference-box half-width along TOF index. |
 | `--halo-scan-half-width` | 2 | Reference-box half-width along ion-mobility scan. |
 | `--denoise-msms` | off | Denoise ddaPASEF **MS/MS** frames precursor-by-precursor (see below). Changes MS/MS spectra and IDs. |
 | `--msms-min-feature-length` | 3 | MS/MS filter: min vertical-run span (+ `--msms-mz-half-width`, `--msms-max-internal-gap`, `--msms-min-window-intensity`, `--msms-min-feature-intensity`, `--msms-iterations`). |
@@ -71,6 +77,10 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 | `--dia-ms1-window` | off | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented; see below). |
 | `--dia-ms1-mz-pad` | 5 | MS1 gate: m/z leniency (Da) added to each side of every window, so an edge precursor keeps its full isotopic envelope. |
 | `--dia-ms1-im-pad` | 0.05 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window. |
+| `--ms1-polygon` | off | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space; auto-detected, no-op if the run stores no polygon). Pads: `--ms1-polygon-mz-pad` (Da), `--ms1-polygon-im-pad` (1/K0). |
+| `--smooth` | off | Final stage: box-average each survivor's intensity over its `(scan, TOF-index)` box (stabilises the watershed centroider). Sub: `--smooth-mz-idx-half-width`, `--smooth-scan-half-width`, `--smooth-iterations`. |
+| `--watershed` | off | Final stage: watershed centroiding — collapse point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
+| `--box-centroid` | off | Final stage: greedy small-box centroiding — tile streaks into small centroids rather than collapse them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
 | `--frame-half-width` | 0 | **Experimental.** Pre-average each MS1 frame over its `2r+1` MS1-frame neighborhood before filtering (see below). |
 | `--all-frames` | off | Also filter MS/MS frames (default: MS1 only). |
 | `--preset` | `none` | Bundle of MS1 gates for the acquisition scheme: `auto` detects ddaPASEF/diaPASEF and enables the matching gate(s), `dda` = selection-polygon, `dia` = isolation-window gates, `none` = nothing. Explicit gate flags still win (see below). |
@@ -250,16 +260,15 @@ Two API tiers are exposed (full docs on [docs.rs](https://docs.rs/dnoise)):
 **High level** — denoise a whole `.d` folder:
 
 ```rust,no_run
-use dnoise::{FilterParams, denoise};
+use dnoise::{FilterParams, Stages, denoise};
 use std::path::Path;
 
 let stats = denoise(
     Path::new("input.d"),
     Path::new("output.d"),
     &FilterParams::default(),
-    false, // filter MS1 only
-    0,     // frame_half_width (0 = no pre-averaging)
-    false, // don't overwrite an existing output
+    &Stages::default(), // optional stages (halo, gates, smoothing, centroiders); all off
+    false,              // don't overwrite an existing output
 )?;
 println!("{} -> {} points", stats.raw_points, stats.kept_points);
 # Ok::<(), dnoise::DnoiseError>(())
@@ -334,6 +343,19 @@ follows `main`; use the `paper` branch's copy to reproduce published numbers.
 Rust deps are pinned in `Cargo.lock`; the Python analysis env is pinned in
 `benchmark/pyproject.toml` + `benchmark/uv.lock` (run via `uv`).
 
+## Citing this work
+
+If you use dnoise in your research, please cite it. Machine-readable metadata is
+in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository" button reads it),
+and each tagged release is archived on Zenodo with a DOI.
+
+<!-- After the first Zenodo release, cite the concept DOI here:
+> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version X.Y.Z) [Software].
+> Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX -->
+
+The accompanying paper is in preparation; its citation will be added here on
+publication.
+
 ## License
 
-Licensed under the [MIT License](LICENSE-MIT).
+Licensed under the [MIT License](LICENSE).

@@ -16,7 +16,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["mass-spectrometry", "proteomics", "timstof", "denoising", "bruker"]
 categories = ["science", "command-line-utilities"]
-exclude = ["/benchmark", "/tools", "/.github", "/dnoise-gui"]
+exclude = ["/benchmark", "/paper", "/.github", "/dnoise-gui"]
 
 [package.metadata.docs.rs]
 all-features = true

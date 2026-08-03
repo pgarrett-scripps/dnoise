@@ -1,0 +1,39 @@
+{
+  "title": "dnoise: structural-prior denoising of Bruker timsTOF .d files",
+  "upload_type": "software",
+  "description": "Fast, in-place denoising of Bruker timsTOF .d files. Real ions form streaks along the ion-mobility axis whereas chemical and electronic noise is short, isolated, or scattered; dnoise exploits that structural prior to remove noise from MS1 (and optionally MS/MS) frames, writing cleaned .d folders that stay drop-in compatible with existing tools. No per-dataset calibration is required. Distributed as a Rust command-line tool and library.",
+  "creators": [
+    {
+      "name": "Garrett, Patrick",
+      "affiliation": "Department of Chemical Physiology, The Scripps Research Institute, La Jolla, CA, USA",
+      "orcid": "0000-0002-8434-9693"
+    },
+    {
+      "name": "Diedrich, Jolene K.",
+      "affiliation": "Multi-Omics Core, The Scripps Research Institute, La Jolla, CA, USA",
+      "orcid": "0000-0001-6489-4558"
+    },
+    {
+      "name": "Yates, John R., III",
+      "affiliation": "Department of Chemical Physiology, The Scripps Research Institute, La Jolla, CA, USA",
+      "orcid": "0000-0001-5267-1672"
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "mass spectrometry",
+    "proteomics",
+    "timsTOF",
+    "ion mobility",
+    "denoising",
+    "PASEF",
+    "Bruker"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/pgarrett-scripps/dnoise",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

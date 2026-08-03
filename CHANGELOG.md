@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-03
+
+First public release.
+
 ### Added
 - **Region-of-interest crop / trim** (`crop` module, `CropParams`, `CropGate`):
   keep only points inside an axis-aligned `(m/z, 1/K0, intensity)` box plus a
@@ -74,3 +78,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - The SQLite `tdf` plumbing is now crate-private; the type-2 codec moved to the
   public `dnoise::codec` module (`dnoise::tdf::encode::*` → `dnoise::codec::*`).
+
+[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.1.0
