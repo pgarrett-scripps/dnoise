@@ -3,3 +3,6 @@
 # (MSRV); this file pins the exact toolchain the published binary was built with.
 [toolchain]
 channel = "1.97.1"
+# CI and `just check` run fmt + clippy under this pinned toolchain, so the
+# components must be pinned with it (the CI action only adds them to stable).
+components = ["rustfmt", "clippy"]
