@@ -15,7 +15,7 @@ abstract: >-
   along the ion-mobility axis whereas chemical and electronic noise is short,
   isolated, or scattered; dnoise exploits that structural prior to remove noise
   from MS1 (and optionally MS/MS) frames, writing cleaned .d folders that stay
-  drop-in compatible with existing tools. No per-dataset calibration is required.
+  drop-in compatible with existing tools.
 type: software
 authors:
   - given-names: Patrick

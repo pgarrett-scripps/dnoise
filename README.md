@@ -15,7 +15,11 @@ that stays drop-in compatible with the Bruker SDK and existing search tools.
 
 Across 72 ddaPASEF + diaPASEF benchmark runs: **35-53% smaller** native
 binaries, LFQ accuracy preserved, and at most a 2.3% change in
-identifications. No per-dataset calibration or tuning is required.
+identifications. All of those runs used the same default parameters with no
+per-run tuning — but they come from one instrument and two gradients, so
+other instruments and sample types are untested. Validate on your own data
+before committing: `--dry-run` reports the reduction without writing
+anything, and MS1-only mode (the default) leaves identifications untouched.
 
 ## Install
 
