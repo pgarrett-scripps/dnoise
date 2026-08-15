@@ -37,6 +37,10 @@ authors:
     affiliation: >-
       Department of Chemical Physiology, The Scripps Research Institute,
       La Jolla, CA, USA
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21959649
+    description: Concept DOI for all versions; resolves to the latest release.
 repository-code: "https://github.com/pgarrett-scripps/dnoise"
 url: "https://github.com/pgarrett-scripps/dnoise"
 license: MIT

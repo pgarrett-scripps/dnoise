@@ -4,8 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/dnoise.svg)](https://crates.io/crates/dnoise)
 [![Docs.rs](https://docs.rs/dnoise/badge.svg)](https://docs.rs/dnoise)
 [![License](https://img.shields.io/crates/l/dnoise.svg)](#license)
-<!-- After the first Zenodo release, add the concept-DOI badge here:
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX) -->
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21959649.svg)](https://doi.org/10.5281/zenodo.21959649)
 
 
 
@@ -350,9 +349,8 @@ If you use dnoise in your research, please cite it. Machine-readable metadata is
 in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository" button reads it),
 and each tagged release is archived on Zenodo with a DOI.
 
-<!-- After the first Zenodo release, cite the concept DOI here:
-> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version X.Y.Z) [Software].
-> Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX -->
+> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.1.0) [Software].
+> Zenodo. https://doi.org/10.5281/zenodo.21959649
 
 The accompanying paper is in preparation; its citation will be added here on
 publication.
