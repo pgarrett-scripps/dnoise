@@ -1,7 +1,7 @@
 {
   "title": "dnoise: structural-prior denoising of Bruker timsTOF .d files",
   "upload_type": "software",
-  "description": "Fast, in-place denoising of Bruker timsTOF .d files. Real ions form streaks along the ion-mobility axis whereas chemical and electronic noise is short, isolated, or scattered; dnoise exploits that structural prior to remove noise from MS1 (and optionally MS/MS) frames, writing cleaned .d folders that stay drop-in compatible with existing tools. Distributed as a Rust command-line tool and library.",
+  "description": "Fast, in-place denoising of Bruker timsTOF .d files. Real ions form streaks along the ion-mobility axis whereas chemical and electronic noise is short, isolated, or scattered. dnoise exploits that structural prior to remove noise from MS1 (and optionally MS/MS) frames, writing cleaned .d folders that stay drop-in compatible with existing tools. Distributed as a Rust command-line tool and library.",
   "creators": [
     {
       "name": "Garrett, Patrick",

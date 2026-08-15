@@ -1,8 +1,8 @@
 # dnoise reference
 
 Complete documentation of every CLI option, gate, and stage. For a quick
-start see the [README](../README.md); for the algorithm itself see
-[ALGORITHM.md](../ALGORITHM.md); for the library API see
+start see the [README](../README.md), for the algorithm itself see
+[ALGORITHM.md](../ALGORITHM.md), and for the library API see
 [docs.rs](https://docs.rs/dnoise).
 
 ## Command line
@@ -12,7 +12,7 @@ dnoise <INPUT.d> <OUTPUT.d> [options]
 dnoise <INPUT.d> --in-place [options]
 ```
 
-By default the source folder is never modified; a new `.d` is written with a rewritten
+By default the source folder is never modified. A new `.d` is written with a rewritten
 `analysis.tdf_bin` (re-encoded as compression **type 2**) and an updated
 `analysis.tdf` (`Frames.TimsId/NumPeaks/MaxIntensity/SummedIntensities` and
 `GlobalMetadata.TimsCompressionType`). The leading reserved header that Bruker
@@ -20,7 +20,7 @@ places before the first frame (the smallest `Frames.TimsId`, often 64 bytes) is
 copied verbatim and all rewritten offsets are shifted past it, so the output is
 byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 
-Filtering runs in parallel across frames (rayon); frames are written in order
+Filtering runs in parallel across frames (rayon). Frames are written in order
 so binary offsets stay consistent.
 
 ## All options
@@ -39,35 +39,35 @@ so binary offsets stay consistent.
 | `--halo-scan-half-width` | 2 | Reference-box half-width along ion-mobility scan. |
 | `--denoise-msms` | off | Denoise ddaPASEF **MS/MS** frames precursor-by-precursor (see below). Changes MS/MS spectra and IDs. |
 | `--msms-min-feature-length` | 3 | MS/MS filter: min vertical-run span (+ `--msms-mz-half-width`, `--msms-max-internal-gap`, `--msms-min-window-intensity`, `--msms-min-feature-intensity`, `--msms-iterations`). |
-| `--dia-window` | conditional | **diaPASEF only.** Drop MS/MS points whose mobility scan falls outside every isolation window for their frame. On whenever MS/MS frames are filtered (`--denoise-msms` / `--all-frames`); `--no-dia-window` forces it off (see below). |
+| `--dia-window` | conditional | **diaPASEF only.** Drop MS/MS points whose mobility scan falls outside every isolation window for their frame. On whenever MS/MS frames are filtered (`--denoise-msms` / `--all-frames`). `--no-dia-window` forces it off (see below). |
 | `--dia-window-scan-pad` | 0 | Scans of leniency added to each side of every isolation window before a point counts as out-of-window. |
-| `--dia-per-window` | conditional | **diaPASEF only.** When the MS/MS filter runs, filter each isolation window's scan slice independently (no cross-window linking; see below). On whenever MS/MS frames are filtered; `--no-dia-per-window` reverts to whole-frame filtering. |
-| `--dda-window` | conditional | **ddaPASEF only.** Drop MS/MS points whose mobility scan falls outside every `PasefFrameMsMsInfo` isolation event for their frame. Standard acquisitions record no such points, so this enforces an invariant rather than reducing data. On whenever MS/MS frames are filtered; `--no-dda-window` forces it off. |
+| `--dia-per-window` | conditional | **diaPASEF only.** When the MS/MS filter runs, filter each isolation window's scan slice independently (no cross-window linking, see below). On whenever MS/MS frames are filtered. `--no-dia-per-window` reverts to whole-frame filtering. |
+| `--dda-window` | conditional | **ddaPASEF only.** Drop MS/MS points whose mobility scan falls outside every `PasefFrameMsMsInfo` isolation event for their frame. Standard acquisitions record no such points, so this enforces an invariant rather than reducing data. On whenever MS/MS frames are filtered. `--no-dda-window` forces it off. |
 | `--dda-window-scan-pad` | 0 | Scans of leniency added to each side of every isolation event. |
-| `--dia-ms1-window` | on | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented; see below). `--no-dia-ms1-window` disables. |
+| `--dia-ms1-window` | on | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented, see below). `--no-dia-ms1-window` disables. |
 | `--dia-ms1-mz-pad` | 5 | MS1 gate: m/z leniency (Da) added to each side of every window, so an edge precursor keeps its full isotopic envelope. |
 | `--dia-ms1-im-pad` | 0.05 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window. |
-| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space; auto-detected, no-op if the run stores no polygon or defines a diaPASEF window scheme). `--no-ms1-polygon` disables. Pads: `--ms1-polygon-mz-pad` (Da, default 5), `--ms1-polygon-im-pad` (1/K0, default 0.05). |
+| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space). Auto-detected, so it is a no-op if the run stores no polygon or defines a diaPASEF window scheme. `--no-ms1-polygon` disables. Pads: `--ms1-polygon-mz-pad` (Da, default 5), `--ms1-polygon-im-pad` (1/K0, default 0.05). |
 | `--smooth` | off | Final stage: box-average each survivor's intensity over its `(scan, TOF-index)` box (stabilises the watershed centroider). Sub: `--smooth-mz-idx-half-width`, `--smooth-scan-half-width`, `--smooth-iterations`. |
-| `--watershed` | off | Final stage: watershed centroiding — collapse point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
-| `--box-centroid` | off | Final stage: greedy small-box centroiding — tile streaks into small centroids rather than collapse them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
+| `--watershed` | off | Final stage: watershed centroiding, collapsing point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
+| `--box-centroid` | off | Final stage: greedy small-box centroiding, tiling streaks into small centroids rather than collapsing them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
 | `--frame-half-width` | 0 | **Experimental.** Pre-average each MS1 frame over its `2r+1` MS1-frame neighborhood before filtering (see below). |
 | `--all-frames` | off | Also filter MS/MS frames (default: MS1 only). |
-| `--mz-ppm` | — | Set the vertical filter's m/z window from a mass tolerance in ppm (converted at a reference m/z) instead of raw TOF indices; overrides `--mz-half-width` (see below). |
+| `--mz-ppm` | - | Set the vertical filter's m/z window from a mass tolerance in ppm (converted at a reference m/z) instead of raw TOF indices. Overrides `--mz-half-width` (see below). |
 | `--mz-ppm-ref` | acq midpoint | Reference m/z (Da) for `--mz-ppm`. |
-| `--mz-min` / `--mz-max` | — | **Crop.** Keep only points in this m/z band (Da). |
-| `--im-min` / `--im-max` | — | **Crop.** Keep only points in this ion-mobility band (1/K0). |
-| `--rt-min` / `--rt-max` | — | **Crop.** Keep only frames in this retention-time window (**minutes**); out-of-window frames are emitted empty (see below). |
-| `--min-intensity` / `--max-intensity` | — | **Crop.** Keep only points in this intensity range. |
+| `--mz-min` / `--mz-max` | - | **Crop.** Keep only points in this m/z band (Da). |
+| `--im-min` / `--im-max` | - | **Crop.** Keep only points in this ion-mobility band (1/K0). |
+| `--rt-min` / `--rt-max` | - | **Crop.** Keep only frames in this retention-time window (**minutes**). Out-of-window frames are emitted empty (see below). |
+| `--min-intensity` / `--max-intensity` | - | **Crop.** Keep only points in this intensity range. |
 | `--crop-only` | off | Apply only the crop and skip all denoising, so the output is a raw subset of the input (see below). |
 | `--dry-run` | off | Estimate the reduction without writing any output (see below). |
-| `--sample` | — | With `--dry-run`, process only this fraction (`0 < f ≤ 1`) of frames, chosen deterministically, for a fast estimate. |
+| `--sample` | - | With `--dry-run`, process only this fraction (`0 < f ≤ 1`) of frames, chosen deterministically, for a fast estimate. |
 | `--sample-seed` | 0 | Seed for `--sample` frame selection. |
-| `--report` | — | Write a JSON run report (effective config + reduction stats) to this file. |
+| `--report` | - | Write a JSON run report (effective config + reduction stats) to this file. |
 | `--threads` | all cores | Worker threads. |
-| `--config` / `-c` | — | Load parameters from a TOML file (see below). |
+| `--config` / `-c` | - | Load parameters from a TOML file (see below). |
 | `--force` | off | Overwrite an existing output folder. |
-| `--in-place` | off | Denoise the input folder in place (omit `OUTPUT`); see below. |
+| `--in-place` | off | Denoise the input folder in place (omit `OUTPUT`, see below). |
 
 ## Acquisition-aware gates (on by default)
 
@@ -75,11 +75,11 @@ The right gate depends on how the run was acquired, but each gate auto-detects
 its defining geometry and is a silent no-op when it is absent, so a single
 default set picks the right gate per acquisition. The MS1 gates
 (`--ms1-polygon` for ddaPASEF/PASEF, `--dia-ms1-window` for diaPASEF) are
-always on by default; the MS/MS gates (`--dia-window`, `--dda-window`,
+always on by default. The MS/MS gates (`--dia-window`, `--dda-window`,
 `--dia-per-window`) default on only when MS/MS frames are actually filtered
 (`--denoise-msms` or `--all-frames`), so a plain MS1-only run leaves fragment
 spectra untouched. Force any gate off with its `--no-*` flag (or
-`<key> = false` in the config); an explicit flag or config value always wins
+`<key> = false` in the config). An explicit flag or config value always wins
 over the default.
 
 ## Region-of-interest crop (`--mz-*` / `--im-*` / `--rt-*` / `--*-intensity`)
@@ -88,7 +88,7 @@ A crop is a blunt subset of the raw acquisition (not a signal/noise decision):
 it is how you carve a smaller `.d` out of a large one for sharing, faster
 downstream searches, or test fixtures. m/z and mobility bounds become integer
 `(TOF, scan)` ranges via the run calibration and apply to **every** frame (MS1
-and MS/MS alike); the intensity range is a per-point floor/ceiling.
+and MS/MS alike). The intensity range is a per-point floor/ceiling.
 Retention-time bounds act at the frame level: an out-of-window frame is
 emitted **empty** rather than deleted, so the frame axis and every table that
 references it stay valid and Bruker-SDK compatible. The crop composes with the
@@ -102,10 +102,11 @@ the instrument acquired.
 `--dry-run` runs the full pipeline but writes nothing, printing the reduction
 so you can tune parameters without producing an output `.d`. Add
 `--sample 0.1` to process a deterministic 10% of frames for a fast estimate
-(the ratio is representative; only valid with `--dry-run`). `--report out.json`
+(the ratio is representative, and it is only valid with `--dry-run`).
+`--report out.json`
 writes the effective configuration plus the reduction statistics (per-MS-level
 point counts, summed intensities, cropped-frame count, elapsed time) as JSON,
-for parameter sweeps or provenance; it works for both real and dry runs.
+for parameter sweeps or provenance. It works for both real and dry runs.
 
 ## ppm-based m/z window (`--mz-ppm`)
 
@@ -135,22 +136,22 @@ over several frames. dnoise combines each precursor's fragment scans across
 those frames into one spectrum (summing intensity at aligned `(scan, TOF)`),
 runs the vertical + halo filters on the combined spectrum, and then prunes the
 individual scans to the surviving `(scan, TOF)`. Unlike MS1 denoising this
-**modifies MS/MS spectra and therefore identifications** — measure its effect
-by re-searching. Tuned with the `--msms-*` knobs (separate from the MS1 ones;
-default `min_feature_length` is smaller because the windows are short).
+**modifies MS/MS spectra and therefore identifications**. Measure its effect
+by re-searching. Tuned with the `--msms-*` knobs, separate from the MS1 ones,
+with a smaller default `min_feature_length` because the windows are short.
 
 ## diaPASEF isolation windows
 
 In diaPASEF the quadrupole steps through a set of `(mobility, m/z)` isolation
-windows per cycle; each window occupies a contiguous mobility-scan interval
+windows per cycle. Each window occupies a contiguous mobility-scan interval
 (`DiaFrameMsMsWindows`). Two features use that scheme. `--dia-window` drops
-MS/MS points whose scan falls outside every window for their frame — signal
+MS/MS points whose scan falls outside every window for their frame: signal
 that was never isolated (out-of-window noise, typically at the mobility
-edges); `--dia-window-scan-pad` widens each window to tolerate signal just
+edges). `--dia-window-scan-pad` widens each window to tolerate signal just
 past an edge. `--dia-per-window` makes the MS/MS filter (`--denoise-msms` or
 `--all-frames`) run **independently inside each window's scan slice** instead
 of over the whole frame, so the vertical filter cannot fuse a mobility run
-across a window boundary — i.e. no cross-talk between the unrelated precursor
+across a window boundary, i.e. no cross-talk between the unrelated precursor
 m/z bands that adjacent windows isolate. Both are no-ops on ddaPASEF (no
 `DiaFrameMsMs*` tables).
 
@@ -158,7 +159,7 @@ m/z bands that adjacent windows isolate. Both are no-ops on ddaPASEF (no
 
 The union of all isolation windows is the precursor space the method can ever
 fragment. This gate drops **MS1** points whose `(m/z, mobility)` falls in no
-window — precursors that are never selected — keeping the survey scans to the
+window (precursors that are never selected), keeping the survey scans to the
 useful precursor band. Each window is padded in **physical units**:
 `--dia-ms1-mz-pad` (Da, default 5) and `--dia-ms1-im-pad` (1/K0, default
 0.05), converted to TOF indices / scans once via the run's calibration, so a
@@ -169,11 +170,11 @@ no-op on ddaPASEF.
 ## Horizontal-halo filter (on by default)
 
 After the vertical filter, dnoise removes the weak m/z halo flanking bright
-ions — left/right only. Each peak is compared to the maximum intensity in its
+ions, left/right only. Each peak is compared to the maximum intensity in its
 surrounding box (`±halo-scan-half-width` scans × `±halo-mz-idx-half-width` TOF
 indices) **excluding its own TOF column**, and dropped if its intensity is
 below `peak_fraction` of that reference. Excluding the own column means the
-vertical streak above/below a peak never counts against it — only genuine
+vertical streak above/below a peak never counts against it. Only genuine
 left/right neighbors do. It works in integer `(scan, TOF index)` space (no
 calibration) and keeps/drops native points (no smoothing). Disable with
 `--no-halo`.
@@ -184,7 +185,7 @@ It replaces each MS1 frame with the centered running average of its `2r+1`
 MS1-frame neighborhood before filtering. With the default zero intensity
 thresholds the exact-`(scan, tof)` merge mostly *concatenates* adjacent frames
 (they share only ~4% of bins) and inflates the output rather than denoising
-it; it only suppresses noise when `--min-window-intensity` is raised above the
+it. It only suppresses noise when `--min-window-intensity` is raised above the
 single-frame noise floor. Leave it at `0` unless you are deliberately
 experimenting.
 
@@ -234,7 +235,7 @@ INFO dnoise::writer: denoise: complete frames=8639 raw_points=300509979 kept_poi
 ```
 
 Verbosity: `-v` adds debug detail (e.g. why a requested gate was skipped), `-vv`
-adds trace; `-q` limits output to warnings and errors. For fine-grained control set
+adds trace, and `-q` limits output to warnings and errors. For fine-grained control set
 `RUST_LOG` (e.g. `RUST_LOG=dnoise=debug`), which overrides the flags. When stderr is
 an interactive terminal a progress bar is shown instead of periodic progress lines.
 

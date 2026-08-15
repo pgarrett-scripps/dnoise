@@ -1,9 +1,9 @@
-# dnoise — Algorithm Report
+# dnoise: Algorithm Report
 
 Comprehensive description of the three-stage MS1 pipeline dnoise implements,
 namely the ion-mobility streak filter, the m/z-halo filter, and the optional
 centroiders, on Bruker timsTOF MS1 frames. The authoritative implementation is
-the Rust source in [`src/`](src/); this document is the prose specification.
+the Rust source in [`src/`](src/). This document is the prose specification.
 
 ---
 
@@ -11,9 +11,9 @@ the Rust source in [`src/`](src/); this document is the prose specification.
 
 1. [Data model](#data-model)
 2. [Pipeline overview](#pipeline-overview)
-3. [Stage 1 — Vertical-IM feature filter](#stage-1--vertical-im-feature-filter)
-4. [Stage 2 — Pre-centroid intensity smoothing](#stage-2--pre-centroid-intensity-smoothing)
-5. [Stage 3 — Watershed centroider](#stage-3--watershed-centroider)
+3. [Stage 1: Vertical-IM feature filter](#stage-1-vertical-im-feature-filter)
+4. [Stage 2: Pre-centroid intensity smoothing](#stage-2-pre-centroid-intensity-smoothing)
+5. [Stage 3: Watershed centroider](#stage-3-watershed-centroider)
 6. [Post-centroid noise filter](#post-centroid-noise-filter)
 7. [Parameter reference](#parameter-reference)
 8. [Computational complexity](#computational-complexity)
@@ -24,7 +24,7 @@ the Rust source in [`src/`](src/); this document is the prose specification.
 
 ## Data model
 
-The pipeline operates in **integer (scan_number, TOF_index)** space — before
+The pipeline operates in **integer (scan_number, TOF_index)** space, before
 any m/z or 1/K0 conversion. This is the native form of Bruker raw data and
 avoids floating-point binning artifacts.
 
@@ -32,12 +32,12 @@ A single MS1 frame consists of:
 
 - **`num_scans`** ion-mobility scans (typically ~700), each a list of `(tof_idx, intensity)` pairs.
 - Flattened to four parallel arrays of length `N` (total raw points):
-  - `scan_indices : int64`   — which IM scan (0..num_scans−1) the point lives in
-  - `mz_indices   : int64`   — TOF index (integer)
-  - `intensities  : float64` — per-pixel intensity
+  - `scan_indices : int64`   - which IM scan (0..num_scans−1) the point lives in
+  - `mz_indices   : int64`   - TOF index (integer)
+  - `intensities  : float64` - per-pixel intensity
   - For display: `mz_values : float64`, `ook0_values : float64` (computed via Bruker calibration).
 
-The filter and centroider work on the integer arrays; conversion to physical
+The filter and centroider work on the integer arrays. Conversion to physical
 units happens only when emitting final centroids or rendering plots.
 
 ---
@@ -75,11 +75,11 @@ final centroids displayed
 ```
 
 Each stage is independently togglable. The data flow is
-strictly left-to-right; later stages never feed back into earlier ones.
+strictly left-to-right. Later stages never feed back into earlier ones.
 
 ---
 
-## Stage 1 — Vertical-IM feature filter
+## Stage 1: Vertical-IM feature filter
 
 **Function**: `filter_vertical_im_features` (algorithm), wrapped by
 `_run_filter` (which adds iteration).
@@ -103,7 +103,7 @@ index see identical windows, so we evaluate once per unique index):
    ```
    window = { points with mz_index ∈ [c − mz_half_width, c + mz_half_width] }
    ```
-   Located via `np.searchsorted` on the mz-sorted point array — O(log N).
+   Located via `np.searchsorted` on the mz-sorted point array, O(log N).
 
 2. **Sum intensities per scan** inside the window:
    ```
@@ -114,7 +114,7 @@ index see identical windows, so we evaluate once per unique index):
 
 3. **Mark occupied scans**: a scan is occupied iff `profile[s] > 0` AND
    `profile[s] ≥ min_window_intensity`. The positivity guard matters because
-   the bincount zero-fills empty scans — a bare `>=` against 0 would mark
+   the bincount zero-fills empty scans. A bare `>=` against 0 would mark
    every scan occupied.
 
 4. **Find gap-closed runs**: walk the sorted occupied-scan list. Two
@@ -129,7 +129,7 @@ index see identical windows, so we evaluate once per unique index):
    count toward the length (see `tests/filter.rs::length_counts_occupied_scans_not_gap_inclusive_span`).
 
 6. **Filter by run intensity**: compute total intensity over the span
-   (including sub-threshold cells inside internal gaps — they represent real
+   (including sub-threshold cells inside internal gaps, which represent real
    signal that just didn't clear the per-scan bar). Drop runs whose total
    intensity is below `min_feature_intensity`.
 
@@ -159,8 +159,8 @@ for pass in 1..num_iterations:
 ```
 
 Each pass operates on the survivors of the previous one. Points that *only
-just* made the cut on pass 1 — because they sat next to a barely-thick noise
-streak — get dropped on pass 2 when those streaks are gone. The mask is
+just* made the cut on pass 1 (because they sat next to a barely-thick noise
+streak) get dropped on pass 2 when those streaks are gone. The mask is
 always composed against the original point order, so downstream stages see
 the same indexing as the raw input.
 
@@ -180,7 +180,7 @@ end of a run.
 
 ---
 
-## Stage 2 — Pre-centroid intensity smoothing
+## Stage 2: Pre-centroid intensity smoothing
 
 **Function**: `smooth_intensities_box_average`.
 
@@ -209,7 +209,7 @@ new_intensity = mean(
 ```
 
 The point is always in its own box, so the divisor is at least 1. Positions
-are untouched — only intensities are rewritten.
+are untouched. Only intensities are rewritten.
 
 **Implementation**: a sparse bucket grid keyed by
 `(scan // smooth_box_scan, mz_idx // smooth_box_mz_idx)`. Each query inspects
@@ -221,7 +221,7 @@ tolerance, because cell side equals tolerance).
 In Stage 3 the centroider sorts by descending intensity to pick seeds. With
 raw intensities, a noisy spike can outrank the actual peak summit, becoming
 a seed off-center. With smoothed intensities, the seed ordering reflects
-local average density — much more stable.
+local average density, which is much more stable.
 
 ### Parameters
 
@@ -233,7 +233,7 @@ local average density — much more stable.
 
 ---
 
-## Stage 3 — Watershed centroider
+## Stage 3: Watershed centroider
 
 **Function**: `watershed_centroid`. Replaces an earlier greedy span-and-grow
 centroider that had trouble with peak-shape variability.
@@ -241,8 +241,8 @@ centroider that had trouble with peak-shape variability.
 ### Intuition
 
 Think of intensity as elevation. **Watershed segmentation** finds catchment
-basins by gradually lowering a water level — peaks emerge as islands first,
-then progressively flood; where two basins meet, that's a boundary.
+basins by gradually lowering a water level. Peaks emerge as islands first,
+then progressively flood. Where two basins meet, that's a boundary.
 
 We don't actually flood. Equivalently, we process points in **descending
 intensity order** (highest island first, then lower elevations as the water
@@ -278,7 +278,7 @@ for p in points (descending intensity order):
         grid[p.cell].append(p)
     else:
         # Orphan: too weak to seed, no group within reach.
-        # NOT added to the grid — orphans don't claim territory.
+        # NOT added to the grid. Orphans don't claim territory.
         drop p
 
 # Aggregate centroids: one per group.
@@ -295,7 +295,7 @@ for group g:
 1. **Bucket grid sized to the tolerance.** Cells are exactly
    `(box_scan, box_mz_idx)`. Any point within the tolerance must live in one
    of the 3×3 cells around the query, so a small fixed neighborhood is
-   sufficient. No KD-tree, no rebuilding — just a dict-of-lists, O(1)
+   sufficient. No KD-tree, no rebuilding, just a dict-of-lists with O(1)
    amortized insertion.
 
 2. **Nearest-neighbor lookup is over *all assigned points*, not just seeds.**
@@ -308,7 +308,7 @@ for group g:
 3. **Watershed boundary emerges from intensity ordering.** When two peaks
    are far apart, both anchors get promoted. Their groups grow outward and
    meet in the middle. Each valley point joins whichever group's nearest
-   member is closest in Manhattan distance — and because we process top-down,
+   member is closest in Manhattan distance, and because we process top-down,
    the boundary lands where the catchments naturally divide.
 
 ### Tiebreaking
@@ -323,7 +323,7 @@ and deterministic.
 Earlier greedy approaches walked outward from a seed along the IM axis,
 stopping at apparent "valleys" inside the peak. They would over-split
 asymmetric or doubly-peaked shapes. The watershed approach has no per-peak
-walk — every point either joins a group or starts one based on a single
+walk. Every point either joins a group or starts one based on a single
 local distance check. A broad peak with an internal dip is one group as
 long as the dip's points are within the box of some already-assigned
 neighbor (which they almost always are).
@@ -387,7 +387,7 @@ This gives consistent post-processing across the two centroiders.
 
 All knobs, by stage, in the order they appear in the sidebar:
 
-### Stage 1 — Vertical-IM filter
+### Stage 1: Vertical-IM filter
 - `mz_half_width` (default 3)
 - `min_feature_length` (default 5)
 - `max_internal_gap` (default 2)
@@ -395,7 +395,7 @@ All knobs, by stage, in the order they appear in the sidebar:
 - `min_feature_intensity` (default 0)
 - `iterations` (default 2)
 
-### Stage 2 — Smoothing (optional, OFF by default)
+### Stage 2: Smoothing (optional, OFF by default)
 - `smooth` (default off)
 - `smooth_scan_half_width` (default 3)
 - `smooth_mz_idx_half_width` (default 2)
@@ -405,14 +405,14 @@ All knobs, by stage, in the order they appear in the sidebar:
 > `dia_window`, `dia_per_window`), the box centroider and the MS/MS path are documented
 > in `dnoise.toml` and in the paper's Supporting Information rather than here.
 
-### Stage 3 — Watershed centroider
+### Stage 3: Watershed centroider
 - `box_scan` (default 10)
 - `box_mz_idx` (default 3)
 - `min_seed_intensity` (default 0)
 - `min_centroid_total` (default 0)
 
 ### Post-centroid
-- `centroid_noise_mode` (default off; one of off / absolute / mad / percentile / histogram / baseline / iterative_median)
+- `centroid_noise_mode` (default off, one of off / absolute / mad / percentile / histogram / baseline / iterative_median)
 
 The asymmetric `(10, 3)` defaults on the watershed and smoothing boxes
 reflect MS data biology: IM peaks span several scans (each scan is a
@@ -447,14 +447,14 @@ dependents.
 
 ## Failure modes & tuning guidance
 
-### Stage 1 — filter
+### Stage 1: filter
 
 **Symptom: too aggressive (real peaks dropped)**
 - Lower `min_feature_length` (default 5).
 - Raise `max_internal_gap` if features have gaps in their IM profile.
 - Lower `min_window_intensity` if low-intensity peaks are getting masked.
-- Reduce `num_iterations` — each pass is strictly more aggressive than the
-  last.
+- Reduce `num_iterations`, since each pass is strictly more aggressive than
+  the last.
 
 **Symptom: not aggressive enough (noise survives)**
 - Raise `min_feature_length`.
@@ -469,7 +469,7 @@ dependents.
 - Widen `mz_half_width` if real peaks span more TOF indices than the column
   window catches.
 
-### Stage 2 — smoothing
+### Stage 2: smoothing
 
 **Symptom: small adjacent peaks merge**
 - Reduce `smooth_box_scan` (smaller IM window).
@@ -480,17 +480,17 @@ dependents.
 - Increase the smoothing box. A larger box averages over more pixels →
   smoother per-point intensity.
 
-### Stage 3 — centroider
+### Stage 3: centroider
 
 **Symptom: real peaks split into multiple centroids**
-- Increase `box_scan` (most common cause — IM peak is wider than the box).
+- Increase `box_scan` (most common cause: IM peak is wider than the box).
 - Increase `box_mz_idx` if the peak's TOF profile is wider than 3 indices.
-- Verify Stage 2 smoothing is enabled — raw spikes can offset the seed and
+- Verify Stage 2 smoothing is enabled. Raw spikes can offset the seed and
   cause unintended splits when boundaries land "diagonally."
 
 **Symptom: adjacent peaks merge**
 - Decrease `box_scan` or `box_mz_idx`.
-- If only some merges are problematic, raise `min_seed_intensity` — weaker
+- If only some merges are problematic, raise `min_seed_intensity`. Weaker
   peaks may not deserve their own group anyway.
 
 **Symptom: too many tiny centroids**
@@ -499,7 +499,7 @@ dependents.
 
 **Symptom: too few centroids / good peaks dropped**
 - Lower `min_seed_intensity` and `min_centroid_total`.
-- Confirm Stage 1 isn't dropping the input points — the per-pass attrition
+- Confirm Stage 1 isn't dropping the input points. The per-pass attrition
   caption shows this directly.
 
 ### Post-centroid noise filter
@@ -516,7 +516,7 @@ when you know your noise floor from external context.
 | **Scan** / **scan number** | Bruker's index for an ion-mobility ramp position. Higher scan numbers = different mobility. Within a frame, scans are integers 0..`num_scans−1`. |
 | **TOF index** / **mz_idx** | Integer time-of-flight bucket. Converts to m/z via the instrument's calibration polynomial. Working in TOF index space avoids floating-point binning. |
 | **Frame** | A complete TIMS ramp = `num_scans` IM scans. Each MS1 frame has a single retention time. |
-| **Point / pixel** | One `(scan, mz_idx, intensity)` triple — a single Bruker raw datum. |
+| **Point / pixel** | One `(scan, mz_idx, intensity)` triple, a single Bruker raw datum. |
 | **Column** | A vertical strip in `(scan, mz_idx)` space at a given mz center, ±`mz_half_width` indices wide. |
 | **Profile** | A 1D array of length `num_scans` giving summed intensity inside a column at each IM scan. |
 | **Run** | A maximal contiguous block of occupied scans in a profile, allowing gaps ≤ `max_internal_gap`. |

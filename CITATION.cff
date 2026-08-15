@@ -5,7 +5,7 @@
 # Two things to update at release time:
 #   - `version` and `date-released` must match the tag being archived.
 #   - once Zenodo has minted a DOI, add it under `identifiers` so the record is
-#     self-describing; and once the paper is published, fill in `preferred-citation`
+#     self-describing. Once the paper is published, fill in `preferred-citation`
 #     with its DOI so citing the software points readers at the paper.
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
@@ -13,7 +13,7 @@ title: dnoise
 abstract: >-
   Fast, in-place denoising of Bruker timsTOF .d files. Real ions form streaks
   along the ion-mobility axis whereas chemical and electronic noise is short,
-  isolated, or scattered; dnoise exploits that structural prior to remove noise
+  isolated, or scattered. dnoise exploits that structural prior to remove noise
   from MS1 (and optionally MS/MS) frames, writing cleaned .d folders that stay
   drop-in compatible with existing tools.
 type: software
@@ -40,7 +40,7 @@ authors:
 identifiers:
   - type: doi
     value: 10.5281/zenodo.21959649
-    description: Concept DOI for all versions; resolves to the latest release.
+    description: Concept DOI for all versions, resolving to the latest release.
 repository-code: "https://github.com/pgarrett-scripps/dnoise"
 url: "https://github.com/pgarrett-scripps/dnoise"
 license: MIT

@@ -7,7 +7,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21959649.svg)](https://doi.org/10.5281/zenodo.21959649)
 
 Denoise Bruker timsTOF `.d` folders. Real ions form vertical streaks along the
-ion-mobility axis; chemical and electronic noise is short, isolated, or
+ion-mobility axis. Chemical and electronic noise is short, isolated, or
 scattered. dnoise keeps the streaks and drops the rest, writing a cleaned `.d`
 that stays drop-in compatible with the Bruker SDK and existing search tools.
 
@@ -16,7 +16,7 @@ that stays drop-in compatible with the Bruker SDK and existing search tools.
 Across 72 ddaPASEF + diaPASEF benchmark runs: **35-53% smaller** native
 binaries, LFQ accuracy preserved, and at most a 2.3% change in
 identifications. All of those runs used the same default parameters with no
-per-run tuning — but they come from one instrument and two gradients, so
+per-run tuning. They come from one instrument and two gradients, though, so
 other instruments and sample types are untested. Validate on your own data
 before committing: `--dry-run` reports the reduction without writing
 anything, and MS1-only mode (the default) leaves identifications untouched.
@@ -32,7 +32,8 @@ Or download a prebuilt binary (CLI + GUI, Linux/macOS/Windows) from the
 
 ## Usage
 
-The defaults are the configuration benchmarked in the paper — no flags needed:
+The defaults are the configuration benchmarked in the paper, so no flags are
+needed:
 
 ```bash
 dnoise input.d output.d
@@ -44,9 +45,9 @@ INFO dnoise::writer: MS1 selection-polygon gate active
 INFO dnoise::writer: denoise: complete frames=8639 raw_points=300509979 kept_points=110092035 kept_pct=36.64
 ```
 
-By default only **MS1** frames are filtered, so MS/MS spectra — and therefore
-identifications — are untouched. Acquisition-aware gates detect whether the
-run is ddaPASEF or diaPASEF and apply the matching geometry automatically; on
+By default only **MS1** frames are filtered, so MS/MS spectra (and therefore
+identifications) are untouched. Acquisition-aware gates detect whether the
+run is ddaPASEF or diaPASEF and apply the matching geometry automatically. On
 runs where a gate's geometry is absent it is a silent no-op.
 
 Useful variations:
@@ -55,12 +56,12 @@ Useful variations:
 |---|---|
 | `dnoise in.d --in-place` | Overwrite the input (atomically, with a rollback on failure). |
 | `dnoise in.d out.d --dry-run` | Report the reduction without writing anything. |
-| `dnoise in.d out.d --denoise-msms` | Also denoise MS/MS spectra (changes IDs; re-search to measure). |
+| `dnoise in.d out.d --denoise-msms` | Also denoise MS/MS spectra (changes IDs, re-search to measure). |
 | `dnoise in.d out.d --config my.toml` | Load parameters from a TOML file ([example](dnoise.toml)). |
 | `dnoise in.d out.d --report run.json` | Write effective config + reduction stats as JSON. |
 
-Every knob — filter parameters, per-gate control, region-of-interest cropping,
-smoothing and centroiding stages, logging — is documented in the
+Every knob (filter parameters, per-gate control, region-of-interest cropping,
+smoothing and centroiding stages, logging) is documented in the
 **[full reference](docs/reference.md)** and in `dnoise --help`. The method
 itself is described in [ALGORITHM.md](ALGORITHM.md).
 
@@ -90,15 +91,15 @@ println!("{} -> {} points", stats.raw_points, stats.kept_points);
 ```
 
 A lower-level API exposes the filter on in-memory frames (`FlatFrame`,
-`filter_iterated`) and the type-2 codec directly; see
+`filter_iterated`) and the type-2 codec directly. See
 [docs.rs](https://docs.rs/dnoise) and [docs/reference.md](docs/reference.md).
 
 ## Compatibility
 
 Output is always compression **type 2**, byte-layout compatible with the
-Bruker SDK / `timsdata` DLL; validate any output with
+Bruker SDK / `timsdata` DLL. Validate any output with
 `cargo run --release --example validate -- <PATH.d>`. Type-3
-(zstd + bitshuffle) *input* is not yet readable — see the
+(zstd + bitshuffle) *input* is not yet readable, see the
 [reference](docs/reference.md#limitation-input-compression-type).
 
 ## Reproducing the paper
@@ -119,7 +120,7 @@ and each tagged release is archived on Zenodo.
 > Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.1.0) [Software].
 > Zenodo. https://doi.org/10.5281/zenodo.21959649
 
-The accompanying paper is in preparation; its citation will be added here on
+The accompanying paper is in preparation. Its citation will be added here on
 publication.
 
 ## License
