@@ -56,8 +56,9 @@ mod tdf;
 // High-level pipeline.
 pub use error::{DecodeError, DnoiseError, Result};
 pub use params::{
-    BoxCentroidParams, CropParams, DiaMs1WindowParams, DiaWindowParams, FilterParams, HaloParams,
-    Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages, WatershedParams,
+    BoxCentroidParams, CropParams, DdaWindowParams, DiaMs1WindowParams, DiaWindowParams,
+    FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages,
+    WatershedParams,
 };
 pub use writer::{
     Calibration, DecodedFrame, DenoiseStats, FrameCtx, Progress, RunContext, RunOptions,

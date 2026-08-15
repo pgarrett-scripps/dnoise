@@ -1,11 +1,11 @@
 //! dnoise CLI.
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use dnoise::{
-    Acquisition, BoxCentroidParams, CropParams, DiaMs1WindowParams, DiaWindowParams, FilterParams,
-    HaloParams, Ms1PolygonParams, MsmsFilterParams, RunOptions, SampleSpec, SmoothParams, Stages,
-    WatershedParams,
+    BoxCentroidParams, CropParams, DdaWindowParams, DiaMs1WindowParams, DiaWindowParams,
+    FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, RunOptions, SampleSpec,
+    SmoothParams, Stages, WatershedParams,
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::IsTerminal;
@@ -144,26 +144,58 @@ struct Cli {
 
     /// diaPASEF only: drop MS/MS points whose mobility scan falls outside every
     /// isolation window for their frame (out-of-window noise). No effect on
-    /// ddaPASEF. Independent of the MS/MS streak filter.
+    /// ddaPASEF. Independent of the MS/MS streak filter. On by default whenever
+    /// MS/MS frames are filtered (--denoise-msms / --all-frames); accepting this
+    /// flag explicitly is a harmless no-op.
     #[arg(long)]
     dia_window: bool,
+    /// Disable the diaPASEF MS/MS out-of-window gate (otherwise on whenever MS/MS
+    /// frames are filtered).
+    #[arg(long)]
+    no_dia_window: bool,
     /// diaPASEF gate: scans of leniency added to each side of every isolation
     /// window before a point is treated as out-of-window.
     #[arg(long)]
     dia_window_scan_pad: Option<u32>,
     /// diaPASEF only: when the MS/MS filter runs (--denoise-msms or --all-frames),
     /// filter each isolation window's scan slice independently instead of the whole
-    /// frame, so a mobility run cannot be fused across a window boundary. No effect
-    /// on ddaPASEF.
+    /// frame, so a mobility run cannot be fused across a window boundary. On by
+    /// default whenever MS/MS frames are filtered; accepting this flag explicitly is
+    /// a harmless no-op. No effect on ddaPASEF.
     #[arg(long)]
     dia_per_window: bool,
+    /// Disable diaPASEF per-window MS/MS filtering, reverting to whole-frame (the
+    /// MS/MS filter runs across the whole frame instead of window-by-window).
+    #[arg(long)]
+    no_dia_per_window: bool,
+
+    /// ddaPASEF only: drop MS/MS points whose mobility scan falls outside every
+    /// PasefFrameMsMsInfo isolation event for their frame. Standard timsTOF
+    /// ddaPASEF acquisitions record no such points, so this is a guarantee
+    /// rather than a reduction. No effect on diaPASEF. On by default whenever
+    /// MS/MS frames are filtered (--denoise-msms / --all-frames); accepting this
+    /// flag explicitly is a harmless no-op.
+    #[arg(long)]
+    dda_window: bool,
+    /// Disable the ddaPASEF MS/MS out-of-window gate (otherwise on whenever
+    /// MS/MS frames are filtered).
+    #[arg(long)]
+    no_dda_window: bool,
+    /// ddaPASEF gate: scans of leniency added to each side of every isolation
+    /// event before a point is treated as out-of-window.
+    #[arg(long)]
+    dda_window_scan_pad: Option<u32>,
 
     /// diaPASEF only: drop MS1 points whose (m/z, mobility) falls outside every
     /// isolation window (precursors that are never fragmented). Windows are padded
     /// per --dia-ms1-mz-pad / --dia-ms1-im-pad so edge precursors keep their full
-    /// isotopic envelope. No effect on ddaPASEF.
+    /// isotopic envelope. No effect on ddaPASEF. On by default; passing this flag
+    /// explicitly is a harmless no-op.
     #[arg(long)]
     dia_ms1_window: bool,
+    /// Disable the diaPASEF MS1 out-of-window gate (otherwise on by default).
+    #[arg(long)]
+    no_dia_ms1_window: bool,
     /// diaPASEF MS1 gate: m/z leniency added to each side of every window, in Da.
     #[arg(long)]
     dia_ms1_mz_pad: Option<f64>,
@@ -173,9 +205,15 @@ struct Cli {
 
     /// Drop MS1 points outside the run's ddaPASEF/PASEF selection polygon (the IMS
     /// PolygonFilter stored in analysis.tdf) — signal in never-selected precursor
-    /// space. Auto-detected: no-op when the run stores no polygon.
+    /// space. On by default; auto-detected: a no-op when the run stores no polygon
+    /// or defines a diaPASEF window scheme. Passing this flag explicitly is a
+    /// harmless no-op.
     #[arg(long)]
     ms1_polygon: bool,
+    /// Disable the MS1 selection-polygon gate (otherwise on by default for
+    /// ddaPASEF/PASEF).
+    #[arg(long)]
+    no_ms1_polygon: bool,
     /// MS1 polygon gate: m/z leniency added to each side, in Da (keeps an edge
     /// precursor's isotopic envelope).
     #[arg(long)]
@@ -188,13 +226,6 @@ struct Cli {
     /// vertical-IM filter is MS1-specific and strips most MS/MS fragment signal).
     #[arg(long)]
     all_frames: bool,
-
-    /// Preset bundle of MS1 gates matched to the acquisition scheme. `auto` detects
-    /// ddaPASEF vs diaPASEF and enables the matching gate(s); `dda` forces the
-    /// selection-polygon gate; `dia` forces the isolation-window gates; `none`
-    /// (default) enables nothing. Explicit gate flags still override the preset.
-    #[arg(long, value_enum, default_value_t = Preset::None)]
-    preset: Preset,
 
     /// Crop: keep only points at or above this m/z (Da). Applies to all frames.
     #[arg(long, value_name = "MZ")]
@@ -268,69 +299,6 @@ struct Cli {
     /// Quiet: log only warnings and errors. Overridden by RUST_LOG.
     #[arg(short, long, conflicts_with = "verbose")]
     quiet: bool,
-}
-
-/// Named bundle of MS1 gates selected by `--preset`. Presets only flip the gate
-/// *enables* (with default pads); every other knob keeps its CLI / config / default
-/// resolution, and an explicit gate flag always wins over the preset.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum Preset {
-    /// Enable nothing (current default behaviour).
-    None,
-    /// Detect the acquisition scheme and enable the matching gate(s).
-    Auto,
-    /// ddaPASEF: enable the MS1 selection-polygon gate.
-    Dda,
-    /// diaPASEF: enable the MS1 and MS/MS isolation-window gates.
-    Dia,
-}
-
-/// The gate enables a preset asks for. `None` fields leave the knob to its normal
-/// CLI / config / default resolution; `Some(true)` turns a gate on unless an
-/// explicit flag already did.
-#[derive(Clone, Copy, Default)]
-struct PresetGates {
-    ms1_polygon: Option<bool>,
-    dia_ms1_window: Option<bool>,
-    dia_window: Option<bool>,
-}
-
-impl Preset {
-    /// Resolve this preset to its gate enables. `Auto` inspects the input `.d`;
-    /// ddaPASEF maps to [`Preset::Dda`], diaPASEF to [`Preset::Dia`], and anything
-    /// else (MS1-only / unknown) enables nothing.
-    fn gates(self, input: &Path) -> Result<PresetGates> {
-        let effective = match self {
-            Preset::None => return Ok(PresetGates::default()),
-            Preset::Auto => match dnoise::detect_acquisition(input)? {
-                Acquisition::DdaPasef => {
-                    info!("preset auto: detected ddaPASEF -> selection-polygon gate");
-                    Preset::Dda
-                }
-                Acquisition::DiaPasef => {
-                    info!("preset auto: detected diaPASEF -> isolation-window gates");
-                    Preset::Dia
-                }
-                other => {
-                    info!(?other, "preset auto: no gate preset for this scheme");
-                    Preset::None
-                }
-            },
-            explicit => explicit,
-        };
-        Ok(match effective {
-            Preset::Dda => PresetGates {
-                ms1_polygon: Some(true),
-                ..PresetGates::default()
-            },
-            Preset::Dia => PresetGates {
-                dia_ms1_window: Some(true),
-                dia_window: Some(true),
-                ..PresetGates::default()
-            },
-            _ => PresetGates::default(),
-        })
-    }
 }
 
 /// Map the `-v` (repeatable) / `-q` flags to the `dnoise` log level used when
@@ -437,10 +405,6 @@ fn main() -> Result<()> {
         );
         params.mz_half_width = hw;
     }
-
-    // Resolve the preset's gate enables (Auto inspects the input `.d`). These act as
-    // an extra default layer under the explicit CLI flags and config file below.
-    let preset_gates = cli.preset.gates(&cli.input)?;
 
     // Pre-filter smoothing radius (decoupled from the filter knobs above): explicit
     // CLI flag > config file > 0 (off).
@@ -577,39 +541,79 @@ fn main() -> Result<()> {
         ),
     };
 
-    // diaPASEF isolation-window features (both off by default, diaPASEF-only).
-    // `dia_window` gates out-of-window MS/MS points; `dia_per_window` makes the
-    // MS/MS filter run window-by-window. Both share the DiaFrameMsMs* tables.
-    let dia_window_enabled =
-        cli.dia_window || cfg.dia_window.or(preset_gates.dia_window).unwrap_or(false);
+    // Boolean/operational flags: the CLI flag can only turn `all_frames` on; when
+    // absent it falls back to the config value (default false). Resolved here
+    // because the MS/MS gates' defaults key off whether MS/MS frames are filtered
+    // at all.
+    let all_frames = cli.all_frames || cfg.all_frames.unwrap_or(false);
+    let threads = cli.threads.or(cfg.threads);
+
+    // Acquisition-aware noise gates. All of them are on by default and each is a
+    // silent no-op when its defining geometry is absent, so a single default set
+    // picks the right gate per acquisition: the polygon builds only on
+    // ddaPASEF/PASEF (skipped when a diaPASEF window scheme is present), the MS1
+    // out-of-window gate builds only on diaPASEF. `--no-*` (or `<key> = false`)
+    // forces any of them off.
+
+    // diaPASEF isolation-window features (diaPASEF-only). `dia_window` gates
+    // out-of-window MS/MS points; `dia_per_window` makes the MS/MS filter run
+    // window-by-window (so a mobility run cannot fuse across a window boundary).
+    // Both share the DiaFrameMsMs* tables and both touch MS/MS frames, so both
+    // default on only when MS/MS frames are actually filtered (MS/MS denoising or
+    // --all-frames) — a plain MS1-only run leaves fragment spectra untouched.
+    // `--no-dia-window` / `--no-dia-per-window` (or `<key> = false`) force either off.
+    let dia_window_enabled = if cli.no_dia_window {
+        false
+    } else {
+        cli.dia_window || cfg.dia_window.unwrap_or(msms_enabled || all_frames)
+    };
     let d = DiaWindowParams::default();
     let dia_window = DiaWindowParams {
         scan_pad: pick!(cli.dia_window_scan_pad, cfg.dia_window_scan_pad, d.scan_pad),
     };
-    let dia_per_window = cli.dia_per_window || cfg.dia_per_window.unwrap_or(false);
+    let dia_per_window = if cli.no_dia_per_window {
+        false
+    } else {
+        cli.dia_per_window || cfg.dia_per_window.unwrap_or(msms_enabled || all_frames)
+    };
 
-    // diaPASEF MS1 out-of-window gate (off by default, diaPASEF-only): drop MS1
+    // ddaPASEF MS/MS out-of-window gate: the ddaPASEF twin of `dia_window`,
+    // driven by PasefFrameMsMsInfo isolation events. Same conditional default —
+    // it touches MS/MS frames, so it is on only when they are actually filtered.
+    // On standard timsTOF ddaPASEF files it removes nothing (the acquisition
+    // writes MS/MS scans only inside scheduled events); it runs as a guarantee.
+    let dda_window_enabled = if cli.no_dda_window {
+        false
+    } else {
+        cli.dda_window || cfg.dda_window.unwrap_or(msms_enabled || all_frames)
+    };
+    let d = DdaWindowParams::default();
+    let dda_window = DdaWindowParams {
+        scan_pad: pick!(cli.dda_window_scan_pad, cfg.dda_window_scan_pad, d.scan_pad),
+    };
+
+    // diaPASEF MS1 out-of-window gate (on by default, diaPASEF-only): drop MS1
     // points outside every isolation window's (m/z, mobility) region, padded in
     // physical units. CLI > config > default for the pads.
-    let dia_ms1_enabled = cli.dia_ms1_window
-        || cfg
-            .dia_ms1_window
-            .or(preset_gates.dia_ms1_window)
-            .unwrap_or(false);
+    let dia_ms1_enabled = if cli.no_dia_ms1_window {
+        false
+    } else {
+        cli.dia_ms1_window || cfg.dia_ms1_window.unwrap_or(true)
+    };
     let d = DiaMs1WindowParams::default();
     let dia_ms1 = DiaMs1WindowParams {
         mz_pad: pick!(cli.dia_ms1_mz_pad, cfg.dia_ms1_mz_pad, d.mz_pad),
         im_pad: pick!(cli.dia_ms1_im_pad, cfg.dia_ms1_im_pad, d.im_pad),
     };
 
-    // MS1 selection-polygon gate (off by default): drop MS1 points outside the
+    // MS1 selection-polygon gate (on by default): drop MS1 points outside the
     // run's IMS PolygonFilter. CLI > config > default for the pads. Auto-detects
-    // polygon presence (no-op otherwise).
-    let ms1_polygon_enabled = cli.ms1_polygon
-        || cfg
-            .ms1_polygon
-            .or(preset_gates.ms1_polygon)
-            .unwrap_or(false);
+    // polygon presence (no-op otherwise, including on diaPASEF).
+    let ms1_polygon_enabled = if cli.no_ms1_polygon {
+        false
+    } else {
+        cli.ms1_polygon || cfg.ms1_polygon.unwrap_or(true)
+    };
     let d = Ms1PolygonParams::default();
     let ms1_polygon = Ms1PolygonParams {
         mz_pad: pick!(cli.ms1_polygon_mz_pad, cfg.ms1_polygon_mz_pad, d.mz_pad),
@@ -654,11 +658,6 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    // Boolean/operational flags: the CLI flag can only turn `all_frames` on; when
-    // absent it falls back to the config value (default false).
-    let all_frames = cli.all_frames || cfg.all_frames.unwrap_or(false);
-    let threads = cli.threads.or(cfg.threads);
-
     if let Some(t) = threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(t)
@@ -675,6 +674,7 @@ fn main() -> Result<()> {
         watershed: watershed_enabled.then_some(&watershed),
         box_centroid: box_centroid_enabled.then_some(&box_centroid),
         dia_window: dia_window_enabled.then_some(&dia_window),
+        dda_window: dda_window_enabled.then_some(&dda_window),
         dia_per_window,
         dia_ms1: dia_ms1_enabled.then_some(&dia_ms1),
         ms1_polygon: ms1_polygon_enabled.then_some(&ms1_polygon),
@@ -701,10 +701,10 @@ fn main() -> Result<()> {
         watershed = watershed_enabled,
         box_centroid = box_centroid_enabled,
         dia_window = dia_window_enabled,
+        dda_window = dda_window_enabled,
         dia_per_window,
         dia_ms1 = dia_ms1_enabled,
         ms1_polygon = ms1_polygon_enabled,
-        preset = ?cli.preset,
         crop = !crop.is_empty(),
         crop_only,
         dry_run,
@@ -875,7 +875,6 @@ fn build_report(
         "acquisition": dnoise::detect_acquisition(&cli.input)
             .map(|a| format!("{a:?}"))
             .unwrap_or_else(|_| "unknown".into()),
-        "preset": format!("{:?}", cli.preset),
         "dry_run": stats.dry_run,
         "sample": cli.sample.map(|f| json!({ "fraction": f, "seed": cli.sample_seed })),
         "config": {
@@ -897,6 +896,7 @@ fn build_report(
                 "watershed": stages.watershed.is_some(),
                 "box_centroid": stages.box_centroid.is_some(),
                 "dia_window": stages.dia_window.is_some(),
+                "dda_window": stages.dda_window.is_some(),
                 "dia_per_window": stages.dia_per_window,
                 "dia_ms1_window": stages.dia_ms1.is_some(),
                 "ms1_polygon": stages.ms1_polygon.is_some(),

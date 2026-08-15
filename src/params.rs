@@ -157,6 +157,18 @@ pub struct DiaWindowParams {
     pub scan_pad: u32,
 }
 
+/// Knobs for the ddaPASEF MS/MS out-of-window gate: the same scan-interval gate
+/// as [`crate::dia_window`], driven by `PasefFrameMsMsInfo` isolation events
+/// instead of `DiaFrameMsMsWindows`. On every timsTOF ddaPASEF file examined so
+/// far the acquisition writes MS/MS scans only inside the scheduled isolation
+/// events, so this gate removes nothing there — it exists as a guarantee, and
+/// for acquisitions that behave otherwise.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DdaWindowParams {
+    /// Scans of leniency added to each side of every isolation event (default 0).
+    pub scan_pad: u32,
+}
+
 /// Knobs for the diaPASEF **MS1** out-of-window gate ([`crate::dia_ms1`]). DIA
 /// tiles the precursor space into isolation windows, each covering an m/z band
 /// over a mobility-scan interval (`DiaFrameMsMsWindows`). An MS1 peak that falls
@@ -189,15 +201,25 @@ impl Default for DiaMs1WindowParams {
 /// where the instrument never schedules fragmentation, so for ddaPASEF it is never
 /// a precursor and can be dropped from the survey scans. The polygon itself comes
 /// from the data; the pads add physical-unit leniency so a precursor near an edge
-/// keeps its isotopic envelope (m/z) and mobility spread (1/K0). `0.0`/`0.0`
-/// reproduces the literal polygon.
-#[derive(Debug, Clone, Copy, Default)]
+/// keeps its isotopic envelope (m/z) and mobility spread (1/K0). Defaults match
+/// [`DiaMs1WindowParams`]; set both pads to `0.0` to reproduce the literal
+/// polygon.
+#[derive(Debug, Clone, Copy)]
 pub struct Ms1PolygonParams {
     /// m/z leniency added to each side of the polygon interior, in **Daltons**
     /// (isotopes run to higher m/z, spaced `1/charge` Da).
     pub mz_pad: f64,
     /// Ion-mobility leniency added to each side, in **1/K0**.
     pub im_pad: f64,
+}
+
+impl Default for Ms1PolygonParams {
+    fn default() -> Self {
+        Self {
+            mz_pad: 5.0,
+            im_pad: 0.05,
+        }
+    }
 }
 
 /// Vertical-filter knobs for the ddaPASEF MS/MS path ([`crate::msms`]). Mirrors
@@ -223,8 +245,8 @@ impl Default for MsmsFilterParams {
     fn default() -> Self {
         Self {
             mz_half_width: 3,
-            min_feature_length: 2,
-            max_internal_gap: 5,
+            min_feature_length: 3,
+            max_internal_gap: 8,
             min_window_intensity: 0,
             min_feature_intensity: 0,
             num_iterations: 1,
@@ -331,11 +353,21 @@ mod tests {
     }
 
     #[test]
+    fn polygon_pad_defaults_match_dia_ms1() {
+        // The polygon gate is the ddaPASEF twin of the DIA MS1 gate; its pads
+        // default to the same physical leniency.
+        let p = Ms1PolygonParams::default();
+        let d = DiaMs1WindowParams::default();
+        assert_eq!(p.mz_pad, d.mz_pad);
+        assert_eq!(p.im_pad, d.im_pad);
+    }
+
+    #[test]
     fn msms_defaults_use_a_shorter_feature_length_than_ms1() {
         // Tuned for the short (~25-scan) precursor isolation windows.
         let m = MsmsFilterParams::default();
-        assert_eq!(m.min_feature_length, 2);
-        assert_eq!(m.max_internal_gap, 5);
+        assert_eq!(m.min_feature_length, 3);
+        assert_eq!(m.max_internal_gap, 8);
         assert_eq!(m.num_iterations, 1);
         assert!(m.min_feature_length < FilterParams::default().min_feature_length);
     }
@@ -404,6 +436,7 @@ mod tests {
         assert!(s.watershed.is_none());
         assert!(s.box_centroid.is_none());
         assert!(s.dia_window.is_none());
+        assert!(s.dda_window.is_none());
         assert!(!s.dia_per_window);
         assert!(s.dia_ms1.is_none());
         assert!(s.ms1_polygon.is_none());
@@ -454,10 +487,16 @@ pub struct Stages<'a> {
     /// points whose mobility scan falls outside every isolation window for their
     /// frame. No effect on ddaPASEF. `None` disables it.
     pub dia_window: Option<&'a DiaWindowParams>,
+    /// ddaPASEF MS/MS out-of-window gate: drop fragment points whose mobility
+    /// scan falls outside every `PasefFrameMsMsInfo` isolation event for their
+    /// frame. Standard timsTOF ddaPASEF acquisitions record no such points, so
+    /// this is a guarantee rather than a reduction. No effect on diaPASEF.
+    /// `None` disables it.
+    pub dda_window: Option<&'a DdaWindowParams>,
     /// diaPASEF per-window MS/MS filtering ([`crate::dia_window::filter_per_window`]):
     /// run the MS/MS filter independently inside each isolation window's scan slice
-    /// instead of over the whole frame. Applies wherever the MS/MS filter runs;
-    /// ignored on ddaPASEF.
+    /// instead of over the whole frame, so a mobility run cannot fuse across a window
+    /// boundary. On by default wherever the MS/MS filter runs; ignored on ddaPASEF.
     pub dia_per_window: bool,
     /// diaPASEF MS1 out-of-window gate ([`crate::dia_ms1`]): drop MS1 points whose
     /// `(m/z, mobility)` falls outside every padded isolation window. No effect on

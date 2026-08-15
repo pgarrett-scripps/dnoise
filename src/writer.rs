@@ -213,6 +213,7 @@ fn run<F: FnMut(Progress)>(
         halo,
         denoise_msms,
         dia_window,
+        dda_window,
         dia_per_window,
         dia_ms1,
         ms1_polygon,
@@ -321,6 +322,27 @@ fn run<F: FnMut(Progress)>(
     };
     let dia_windows_ref = dia_windows.as_ref();
 
+    // ddaPASEF isolation-event intervals for the MS/MS out-of-window gate, in the
+    // same per-frame shape as the diaPASEF scheme. Empty for diaPASEF (no
+    // PasefFrameMsMsInfo), so the gate no-ops there — and on standard timsTOF
+    // ddaPASEF files it is expected to remove nothing (the acquisition writes
+    // MS/MS scans only inside scheduled isolation events); it runs as a guarantee.
+    let dda_windows: Option<DiaWindows> = if dda_window.is_some() {
+        let w = DiaWindows::from_pasef(&tdf::read_pasef_msms(&in_tdf)?);
+        if w.is_empty() {
+            debug!(
+                "ddaPASEF window gate requested but no isolation events found (diaPASEF?) — skipped"
+            );
+            None
+        } else {
+            info!("ddaPASEF MS/MS out-of-window gate active");
+            Some(w)
+        }
+    } else {
+        None
+    };
+    let dda_windows_ref = dda_windows.as_ref();
+
     // diaPASEF MS1 out-of-window gate: build the padded `(scan, TOF)` lookup once
     // from the isolation windows + calibration. `None` for ddaPASEF (no windows).
     let dia_ms1_gate = match dia_ms1 {
@@ -350,6 +372,24 @@ fn run<F: FnMut(Progress)>(
         }
     }
     let polygon_ref = polygon_gate.as_ref();
+
+    // The two gates above were converted from physical units to index space with
+    // the run-level calibration, once. That is exact only while every frame
+    // references one calibration segment; if the file carries more, frames on
+    // other segments see gate boundaries that are slightly offset (ppm-scale),
+    // so say so rather than gating silently.
+    if polygon_ref.is_some() || dia_ms1_ref.is_some() {
+        let (mz_cals, tims_cals) = tdf::count_calibration_segments(&in_tdf)?;
+        if mz_cals > 1 || tims_cals > 1 {
+            warn!(
+                mz_calibrations = mz_cals,
+                tims_calibrations = tims_cals,
+                "run carries multiple calibration segments; the acquisition \
+                 gates were converted with the run-level calibration and may be \
+                 slightly offset on frames referencing other segments"
+            );
+        }
+    }
 
     // Region-of-interest crop: convert the physical `(m/z, 1/K0)` bounds to integer
     // `(TOF, scan)` once via the run calibration (RT bounds are applied per frame
@@ -442,6 +482,7 @@ fn run<F: FnMut(Progress)>(
         msms: msms_ref,
         dia_msms,
         dia_windows: dia_windows_ref,
+        dda_windows: dda_windows_ref,
         dia_ms1: dia_ms1_ref,
         polygon: polygon_ref,
         crop: crop_ref,
@@ -572,6 +613,8 @@ pub struct FrameCtx<'a> {
     dia_msms: Option<&'a MsmsFilterParams>,
     /// diaPASEF isolation windows (`None` for ddaPASEF or when unused).
     dia_windows: Option<&'a DiaWindows>,
+    /// ddaPASEF isolation-event intervals (`None` for diaPASEF or when unused).
+    dda_windows: Option<&'a DiaWindows>,
     /// Built diaPASEF MS1 out-of-window gate (`None` when disabled / ddaPASEF).
     dia_ms1: Option<&'a DiaMs1Gate>,
     /// Built MS1 selection-polygon gate (`None` when disabled or no polygon).
@@ -677,6 +720,7 @@ pub fn process_frame_decoded(
         watershed,
         box_centroid: box_centroid_params,
         dia_window,
+        dda_window,
         dia_per_window,
         ..
     } = stages;
@@ -684,6 +728,7 @@ pub fn process_frame_decoded(
         msms,
         dia_msms,
         dia_windows,
+        dda_windows,
         dia_ms1,
         polygon,
         crop,
@@ -858,6 +903,17 @@ pub fn process_frame_decoded(
     // filtering already excludes these points, making this a no-op there.)
     if !crop_only {
         if let (Some(dp), Some(iv)) = (dia_window, dia_iv) {
+            let mask = in_window_mask(&to_filter.scan, iv, dp.scan_pad);
+            for (slot, keep_pt) in keep.iter_mut().zip(mask) {
+                *slot &= keep_pt;
+            }
+        }
+        // The ddaPASEF twin of the gate above, driven by PasefFrameMsMsInfo
+        // isolation events. Standard timsTOF ddaPASEF files record no
+        // out-of-event scans, so this is expected to change nothing there; it
+        // enforces the invariant rather than trusting the acquisition.
+        let dda_iv = dda_windows.and_then(|w| w.intervals(meta_i.id));
+        if let (Some(dp), Some(iv)) = (dda_window, dda_iv) {
             let mask = in_window_mask(&to_filter.scan, iv, dp.scan_pad);
             for (slot, keep_pt) in keep.iter_mut().zip(mask) {
                 *slot &= keep_pt;
@@ -1153,6 +1209,7 @@ pub struct RunContext<'a> {
     msms_keep: Option<MsmsKeep>,
     dia_msms: Option<&'a MsmsFilterParams>,
     dia_windows: Option<DiaWindows>,
+    dda_windows: Option<DiaWindows>,
     dia_ms1_gate: Option<DiaMs1Gate>,
     polygon_gate: Option<PolygonGate>,
     rt_keep: Vec<bool>,
@@ -1207,6 +1264,15 @@ impl<'a> RunContext<'a> {
             None
         };
 
+        // ddaPASEF isolation-event intervals for the MS/MS out-of-window gate
+        // (mirrors `run`). Empty for diaPASEF, so the gate no-ops there.
+        let dda_windows = if stages.dda_window.is_some() {
+            let w = DiaWindows::from_pasef(&tdf::read_pasef_msms(&in_tdf)?);
+            if w.is_empty() { None } else { Some(w) }
+        } else {
+            None
+        };
+
         let dia_ms1_gate = match stages.dia_ms1 {
             Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta)?,
             None => None,
@@ -1215,6 +1281,22 @@ impl<'a> RunContext<'a> {
             Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
             None => None,
         };
+
+        // Mirror `run`'s calibration-segment warning: the physical-unit gates were
+        // converted with the run-level calibration, which is exact only when every
+        // frame references one segment.
+        if polygon_gate.is_some() || dia_ms1_gate.is_some() {
+            let (mz_cals, tims_cals) = tdf::count_calibration_segments(&in_tdf)?;
+            if mz_cals > 1 || tims_cals > 1 {
+                warn!(
+                    mz_calibrations = mz_cals,
+                    tims_calibrations = tims_cals,
+                    "run carries multiple calibration segments; the acquisition \
+                     gates were converted with the run-level calibration and may be \
+                     slightly offset on frames referencing other segments"
+                );
+            }
+        }
 
         // No crop on the streaming path: every frame is in the RT window.
         let rt_keep = vec![true; n_frames];
@@ -1233,6 +1315,7 @@ impl<'a> RunContext<'a> {
             msms_keep,
             dia_msms,
             dia_windows,
+            dda_windows,
             dia_ms1_gate,
             polygon_gate,
             rt_keep,
@@ -1275,6 +1358,7 @@ impl<'a> RunContext<'a> {
             msms: self.msms_keep.as_ref(),
             dia_msms: self.dia_msms,
             dia_windows: self.dia_windows.as_ref(),
+            dda_windows: self.dda_windows.as_ref(),
             dia_ms1: self.dia_ms1_gate.as_ref(),
             polygon: self.polygon_gate.as_ref(),
             crop: None,

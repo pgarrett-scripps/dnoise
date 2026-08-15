@@ -88,6 +88,9 @@ pub fn read_pasef_msms(tdf_path: &Path) -> Result<Vec<PasefWindow>> {
 /// different intervals comes from unrelated isolation events — so the per-window
 /// MS/MS filter ([`crate::dia_window`]) uses these intervals both to drop
 /// out-of-window points and to filter each window independently (no cross-talk).
+///
+/// [`DiaWindows::from_pasef`] builds the same per-frame interval map from
+/// ddaPASEF isolation events, so the out-of-window gate serves both acquisitions.
 #[derive(Debug, Default)]
 pub struct DiaWindows {
     /// `Frames.Id` -> sorted, non-overlapping `[scan_begin, scan_end)` intervals.
@@ -105,6 +108,36 @@ impl DiaWindows {
     /// frame, or `None` if the frame has no window-group entry.
     pub fn intervals(&self, frame_id: usize) -> Option<&[(u32, u32)]> {
         self.frame_intervals.get(&frame_id).map(Vec::as_slice)
+    }
+
+    /// The same per-frame interval map built from ddaPASEF isolation events
+    /// ([`read_pasef_msms`]) instead of a diaPASEF window scheme, so the same
+    /// out-of-window gate serves both acquisitions. Events are sorted per frame
+    /// and merged where they touch or overlap, matching the contract
+    /// [`crate::dia_window::in_window_mask`] requires. Empty input (diaPASEF,
+    /// non-PASEF) yields an empty map, which callers treat as "no gate".
+    pub fn from_pasef(windows: &[PasefWindow]) -> Self {
+        let mut frame_intervals: HashMap<usize, Vec<(u32, u32)>> = HashMap::new();
+        for w in windows {
+            if w.scan_end > w.scan_begin {
+                frame_intervals
+                    .entry(w.frame)
+                    .or_default()
+                    .push((w.scan_begin, w.scan_end));
+            }
+        }
+        for v in frame_intervals.values_mut() {
+            v.sort_unstable();
+            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+            for &(sb, se) in v.iter() {
+                match merged.last_mut() {
+                    Some(last) if sb <= last.1 => last.1 = last.1.max(se),
+                    _ => merged.push((sb, se)),
+                }
+            }
+            *v = merged;
+        }
+        DiaWindows { frame_intervals }
     }
 }
 
@@ -231,6 +264,37 @@ pub fn read_dia_ms1_boxes(tdf_path: &Path) -> Result<Vec<DiaMs1Box>> {
         .into_iter()
         .filter(|b| b.scan_end > b.scan_begin)
         .collect())
+}
+
+/// Distinct calibration segments referenced by the run's frames, as
+/// `(mz_calibrations, tims_calibrations)`: `COUNT(DISTINCT Frames.MzCalibration)`
+/// and `COUNT(DISTINCT Frames.TimsCalibration)`.
+///
+/// The acquisition gates convert their physical-unit definitions to index space
+/// ONCE, with the run-level calibration timsrust exposes. That is exact only
+/// while every frame references the same calibration segment — true of every
+/// file in the paper's benchmark — so the writer warns when either count
+/// exceeds one. Missing tables or columns (older schemas) count as one segment:
+/// there is nothing to disagree with the run-level calibration there.
+pub fn count_calibration_segments(tdf_path: &Path) -> Result<(usize, usize)> {
+    let conn = Connection::open(tdf_path)?;
+    let mut cols = std::collections::HashSet::new();
+    let mut stmt = conn.prepare("PRAGMA table_info(Frames)")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for c in rows {
+        cols.insert(c?);
+    }
+    let count = |col: &str| -> Result<usize> {
+        if !cols.contains(col) {
+            return Ok(1);
+        }
+        Ok(conn.query_row(
+            &format!("SELECT COUNT(DISTINCT {col}) FROM Frames"),
+            [],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    };
+    Ok((count("MzCalibration")?, count("TimsCalibration")?))
 }
 
 /// Read the ddaPASEF/PASEF MS1 selection polygon (the "IMS PolygonFilter") as
@@ -379,6 +443,54 @@ pub fn update_metadata(tdf_path: &Path, updates: &[FrameUpdate]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_calibration_segments_counts_distinct_refs() {
+        let path =
+            std::env::temp_dir().join(format!("dnoise_cal_segments_{}.tdf", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Frames (Id INTEGER, MzCalibration INTEGER, TimsCalibration INTEGER);
+             INSERT INTO Frames VALUES (1, 1, 1), (2, 1, 1), (3, 2, 1);",
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(count_calibration_segments(&path).unwrap(), (2, 1));
+        let _ = std::fs::remove_file(&path);
+
+        // Older schema without the columns: nothing can disagree, counts as one.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE Frames (Id INTEGER); INSERT INTO Frames VALUES (1);")
+            .unwrap();
+        drop(conn);
+        assert_eq!(count_calibration_segments(&path).unwrap(), (1, 1));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn from_pasef_sorts_and_merges_per_frame() {
+        // Frame 10: out-of-order events, two touching ([36,61)+[61,90) merge),
+        // one separate. Frame 11: a single event. A zero-length event is dropped.
+        let ev = |frame, scan_begin, scan_end| PasefWindow {
+            frame,
+            scan_begin,
+            scan_end,
+            precursor: 1,
+        };
+        let windows = [
+            ev(10, 61, 90),
+            ev(10, 36, 61),
+            ev(10, 200, 225),
+            ev(11, 5, 30),
+            ev(11, 40, 40), // empty, dropped
+        ];
+        let w = DiaWindows::from_pasef(&windows);
+        assert_eq!(w.intervals(10), Some(&[(36u32, 90u32), (200, 225)][..]));
+        assert_eq!(w.intervals(11), Some(&[(5u32, 30u32)][..]));
+        assert_eq!(w.intervals(12), None);
+        assert!(DiaWindows::from_pasef(&[]).is_empty());
+    }
 
     /// Build a throwaway `.tdf` with the two diaPASEF window tables populated,
     /// returning its path (caller removes it).

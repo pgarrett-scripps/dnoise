@@ -71,19 +71,20 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 | `--halo-scan-half-width` | 2 | Reference-box half-width along ion-mobility scan. |
 | `--denoise-msms` | off | Denoise ddaPASEF **MS/MS** frames precursor-by-precursor (see below). Changes MS/MS spectra and IDs. |
 | `--msms-min-feature-length` | 3 | MS/MS filter: min vertical-run span (+ `--msms-mz-half-width`, `--msms-max-internal-gap`, `--msms-min-window-intensity`, `--msms-min-feature-intensity`, `--msms-iterations`). |
-| `--dia-window` | off | **diaPASEF only.** Drop MS/MS points whose mobility scan falls outside every isolation window for their frame (see below). |
+| `--dia-window` | conditional | **diaPASEF only.** Drop MS/MS points whose mobility scan falls outside every isolation window for their frame. On whenever MS/MS frames are filtered (`--denoise-msms` / `--all-frames`); `--no-dia-window` forces it off (see below). |
 | `--dia-window-scan-pad` | 0 | Scans of leniency added to each side of every isolation window before a point counts as out-of-window. |
-| `--dia-per-window` | off | **diaPASEF only.** When the MS/MS filter runs, filter each isolation window's scan slice independently (no cross-window linking; see below). |
-| `--dia-ms1-window` | off | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented; see below). |
+| `--dia-per-window` | conditional | **diaPASEF only.** When the MS/MS filter runs, filter each isolation window's scan slice independently (no cross-window linking; see below). On whenever MS/MS frames are filtered; `--no-dia-per-window` reverts to whole-frame filtering. |
+| `--dda-window` | conditional | **ddaPASEF only.** Drop MS/MS points whose mobility scan falls outside every `PasefFrameMsMsInfo` isolation event for their frame. Standard acquisitions record no such points, so this enforces an invariant rather than reducing data. On whenever MS/MS frames are filtered; `--no-dda-window` forces it off. |
+| `--dda-window-scan-pad` | 0 | Scans of leniency added to each side of every isolation event. |
+| `--dia-ms1-window` | on | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented; see below). `--no-dia-ms1-window` disables. |
 | `--dia-ms1-mz-pad` | 5 | MS1 gate: m/z leniency (Da) added to each side of every window, so an edge precursor keeps its full isotopic envelope. |
 | `--dia-ms1-im-pad` | 0.05 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window. |
-| `--ms1-polygon` | off | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space; auto-detected, no-op if the run stores no polygon). Pads: `--ms1-polygon-mz-pad` (Da), `--ms1-polygon-im-pad` (1/K0). |
+| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space; auto-detected, no-op if the run stores no polygon or defines a diaPASEF window scheme). `--no-ms1-polygon` disables. Pads: `--ms1-polygon-mz-pad` (Da, default 5), `--ms1-polygon-im-pad` (1/K0, default 0.05). |
 | `--smooth` | off | Final stage: box-average each survivor's intensity over its `(scan, TOF-index)` box (stabilises the watershed centroider). Sub: `--smooth-mz-idx-half-width`, `--smooth-scan-half-width`, `--smooth-iterations`. |
 | `--watershed` | off | Final stage: watershed centroiding — collapse point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
 | `--box-centroid` | off | Final stage: greedy small-box centroiding — tile streaks into small centroids rather than collapse them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
 | `--frame-half-width` | 0 | **Experimental.** Pre-average each MS1 frame over its `2r+1` MS1-frame neighborhood before filtering (see below). |
 | `--all-frames` | off | Also filter MS/MS frames (default: MS1 only). |
-| `--preset` | `none` | Bundle of MS1 gates for the acquisition scheme: `auto` detects ddaPASEF/diaPASEF and enables the matching gate(s), `dda` = selection-polygon, `dia` = isolation-window gates, `none` = nothing. Explicit gate flags still win (see below). |
 | `--mz-ppm` | — | Set the vertical filter's m/z window from a mass tolerance in ppm (converted at a reference m/z) instead of raw TOF indices; overrides `--mz-half-width` (see below). |
 | `--mz-ppm-ref` | acq midpoint | Reference m/z (Da) for `--mz-ppm`. |
 | `--mz-min` / `--mz-max` | — | **Crop.** Keep only points in this m/z band (Da). |
@@ -103,15 +104,16 @@ byte-layout-compatible with the Bruker SDK / `timsdata` DLL.
 Filtering runs in parallel across frames (rayon); frames are written in order
 so binary offsets stay consistent.
 
-> **Presets & auto-detection (`--preset`).** The right MS1 gate depends on how the
-> run was acquired: ddaPASEF benefits from the selection-polygon gate, diaPASEF from
-> the isolation-window gates. `--preset auto` reads the run's `MsMsType` and enables
-> the matching gate(s) for you (ddaPASEF → `--ms1-polygon`; diaPASEF →
-> `--dia-ms1-window --dia-window`); MS1-only or unrecognised schemes enable nothing.
-> `--preset dda` / `--preset dia` force a bundle regardless of detection. A preset
-> only supplies gate *defaults*: an explicit gate flag (or config value) always wins,
-> and gates that find nothing to act on (e.g. a run with no polygon) are silently
-> skipped as usual.
+> **Acquisition-aware gates (on by default).** The right gate depends on how the
+> run was acquired, but each gate auto-detects its defining geometry and is a
+> silent no-op when it is absent — so a single default set picks the right gate
+> per acquisition. The MS1 gates (`--ms1-polygon` for ddaPASEF/PASEF,
+> `--dia-ms1-window` for diaPASEF) are always on by default; the MS/MS gates
+> (`--dia-window`, `--dda-window`, `--dia-per-window`) default on only when MS/MS
+> frames are actually filtered (`--denoise-msms` or `--all-frames`), so a plain
+> MS1-only run leaves fragment spectra untouched. Force any gate off with its
+> `--no-*` flag (or `<key> = false` in the config); an explicit flag or config
+> value always wins over the default.
 
 > **Region-of-interest crop (`--mz-*` / `--im-*` / `--rt-*` / `--*-intensity`).** A
 > crop is a blunt subset of the raw acquisition (not a signal/noise decision): it is

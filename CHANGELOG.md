@@ -6,6 +6,62 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **ddaPASEF MS/MS out-of-window gate** (`--dda-window`, `dda_window_scan_pad`,
+  `DdaWindowParams`, `tdf::DiaWindows::from_pasef`): the ddaPASEF twin of
+  `--dia-window`, dropping MS/MS points whose mobility scan falls outside every
+  `PasefFrameMsMsInfo` isolation event for their frame. Standard timsTOF
+  ddaPASEF acquisitions record MS/MS scans only inside scheduled isolation
+  events, so on such files the gate removes nothing — it enforces the invariant
+  rather than trusting the acquisition. Same conditional default as
+  `--dia-window`: on whenever MS/MS frames are filtered, `--no-dda-window`
+  forces it off. No effect on diaPASEF. `Stages` gains
+  `dda_window: Option<&DdaWindowParams>`.
+- **Calibration-segment warning** (`tdf::count_calibration_segments`): when an
+  acquisition gate is active (`ms1_polygon` / `dia_ms1_window`) and the run's
+  frames reference more than one `MzCalibration` or `TimsCalibration` segment,
+  dnoise now logs a warning (in both the file writer and `RunContext`). The
+  gates convert their physical-unit definitions to index space once with the
+  run-level calibration timsrust exposes, which is exact only for a
+  single-segment run; on a multi-segment file the gate boundary would be
+  ppm-scale offset on frames referencing other segments, and the warning says
+  so instead of gating silently.
+- **Pinned toolchain** (`rust-toolchain.toml`, 1.97.1): the exact toolchain the
+  published paper binary was built with; `rust-version = "1.85"` remains the
+  MSRV.
+- **Codec edge-case tests** (cargo-mutants driven): exact-bytes coverage for
+  `encode_empty_frame_type2`, a round-trip with values spanning all four byte
+  planes, and rejection of malformed records (short / over- / under-declared
+  `total_byte_count`).
+
+### Changed
+- **Acquisition-aware noise gates are now on by default, replacing `--preset`.**
+  The MS1 selection-polygon gate (`--ms1-polygon`, ddaPASEF/PASEF) and the
+  diaPASEF MS1 out-of-window gate (`--dia-ms1-window`) default on; the MS/MS
+  gates (`--dia-window`, `--dda-window`, `--dia-per-window`) default on whenever
+  MS/MS frames are filtered (`--denoise-msms` / `--all-frames`). Each gate
+  auto-detects its defining geometry and is a silent no-op when it is absent,
+  so a single default set picks the right gate per acquisition. New `--no-*`
+  flags (`--no-ms1-polygon`, `--no-dia-ms1-window`, `--no-dia-window`,
+  `--no-dda-window`, `--no-dia-per-window`) or `<key> = false` in the config
+  force a gate off. The `--preset none|auto|dda|dia` bundle (whose `auto` mode
+  approximated exactly this behavior) is removed; `--preset none` callers
+  should pass the `--no-*` flags instead.
+- **`Ms1PolygonParams` pad defaults now match the diaPASEF MS1 gate:**
+  `ms1_polygon_mz_pad` 0.0 → 5.0 Da and `ms1_polygon_im_pad` 0.0 → 0.05 1/K0,
+  the same edge leniency `dia_ms1_mz_pad`/`dia_ms1_im_pad` have always applied.
+  The two MS1 gates answer the same question ("could this point ever have been
+  selected as a precursor?"), so they now share the same answer at the polygon
+  edge: an edge precursor keeps its isotopic envelope (m/z runs high) and its
+  mobility spread instead of being clipped by the literal polygon. Set both
+  pads to `0` to reproduce the old behavior.
+- **MS/MS streak-filter defaults retuned:** `msms_min_feature_length` 2 → 3 and
+  `msms_max_internal_gap` 5 → 8, the configuration benchmarked in the paper.
+
+### Fixed
+- The example `dnoise.toml` had drifted from the code defaults
+  (`max_internal_gap` was shown as 1; the built-in default is 2).
+
 ## [0.1.0] - 2026-08-03
 
 First public release.

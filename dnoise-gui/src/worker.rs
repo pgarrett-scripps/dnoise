@@ -137,6 +137,9 @@ fn process_one(
         watershed: None,
         box_centroid: None,
         dia_window: gates.dia_window.then_some(&dia_window),
+        // The GUI never filters MS/MS frames, so the ddaPASEF MS/MS gate would
+        // gate nothing — same conditional default as the CLI (off in MS1-only mode).
+        dda_window: None,
         dia_per_window: false,
         dia_ms1: gates.dia_ms1.then_some(&dia_ms1),
         ms1_polygon: gates.ms1_polygon.then_some(&ms1_polygon),

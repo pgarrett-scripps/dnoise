@@ -3,13 +3,13 @@
 # Every key is optional; omitted keys fall back to these defaults. Explicit CLI
 # flags override anything set here.
 
-# --- Vertical ion-mobility feature filter (the core denoiser) ---
+# --- Ion-mobility streak filter (the core denoiser) ---
 # Column half-width in TOF indices (window spans [c - w, c + w]).
 mz_half_width = 3
-# Minimum total span (scans) of a kept feature.
+# Minimum number of occupied scans in a kept feature (bridged gaps do not count).
 min_feature_length = 5
 # Max empty scans tolerated inside a feature.
-max_internal_gap = 1
+max_internal_gap = 2
 # Per-scan summed-intensity floor for occupancy.
 min_window_intensity = 0
 # Total summed-intensity floor for a kept feature.
@@ -17,7 +17,7 @@ min_feature_intensity = 0
 # Filter passes (each re-applies to the previous survivors).
 iterations = 2
 
-# --- Horizontal-halo filter (runs after the vertical filter; on by default) ---
+# --- m/z-halo filter (runs after the streak filter; on by default) ---
 # Removes the weak m/z halo flanking bright ions (left/right only): each peak is
 # compared to the max intensity of its surrounding box EXCLUDING its own TOF
 # column, and dropped below `peak_fraction` of that reference. Integer
@@ -32,12 +32,12 @@ halo_scan_half_width = 2
 
 # --- MS/MS denoising (ddaPASEF only; off by default) ---
 # Combine each precursor's fragment scans across frames, filter the combined
-# spectrum (vertical + halo), and prune the individual scans. Changes MS/MS
+# spectrum (streak + halo), and prune the individual scans. Changes MS/MS
 # spectra (and identifications). Enable with denoise_msms = true (or --denoise-msms).
 denoise_msms = false
 msms_mz_half_width = 3
-msms_min_feature_length = 2
-msms_max_internal_gap = 5
+msms_min_feature_length = 3
+msms_max_internal_gap = 8
 msms_min_window_intensity = 0
 msms_min_feature_intensity = 0
 msms_iterations = 1
@@ -61,7 +61,7 @@ smooth_iterations = 1
 # centroids via watershed segmentation in integer (scan, TOF index) space.
 # Unlike the filters above (which keep a subset of points), this is LOSSY: it
 # typically shrinks the surviving point count to a small fraction. Applied to
-# the same frames the vertical filter touches. Enable with watershed = true
+# the same frames the streak filter touches. Enable with watershed = true
 # (or pass --watershed).
 watershed = false
 # Nearest-neighbour reach along the ion-mobility scan axis.
@@ -75,44 +75,66 @@ watershed_min_centroid_total = 0
 # Max follower distance from the group seed, in TOF indices.
 watershed_max_tof_offset = 10
 
-# --- diaPASEF isolation windows (diaPASEF only; both off by default) ---
+# --- diaPASEF isolation windows (diaPASEF only) ---
 # Drop MS/MS points whose mobility scan falls outside every isolation window
 # defined for their frame (DiaFrameMsMsWindows). Out-of-window signal was never
 # isolated, so it is noise. Independent of the MS/MS streak filter. No effect on
-# ddaPASEF (no DiaFrameMsMs* tables). Enable with dia_window = true (--dia-window).
-dia_window = false
+# ddaPASEF (no DiaFrameMsMs* tables). On by default WHENEVER MS/MS frames are
+# filtered (denoise_msms on diaPASEF, or all_frames); a plain MS1-only run leaves
+# fragment spectra untouched. Set dia_window = false (or --no-dia-window) to force
+# off; dia_window = true forces it on even in MS1-only mode.
+# dia_window =
 # Scans of leniency added to each side of every window before a point counts as
 # out-of-window.
 dia_window_scan_pad = 0
+# The ddaPASEF twin of dia_window: drop MS/MS points whose mobility scan falls
+# outside every PasefFrameMsMsInfo isolation event for their frame. Standard
+# timsTOF ddaPASEF acquisitions write MS/MS scans only inside scheduled events,
+# so this removes nothing there — it enforces the invariant rather than trusting
+# the acquisition. No effect on diaPASEF. Same conditional default as dia_window
+# (on whenever MS/MS frames are filtered); dda_window = false (or
+# --no-dda-window) forces it off, dda_window = true forces it on.
+# dda_window =
+# Scans of leniency added to each side of every isolation event.
+dda_window_scan_pad = 0
 # When the MS/MS filter runs (denoise_msms on diaPASEF, or all_frames), filter
 # each isolation window's scan slice independently instead of the whole frame, so
 # a mobility run cannot be fused across a window boundary (cross-talk between
-# unrelated isolation events). Enable with dia_per_window = true (--dia-per-window).
-dia_per_window = false
+# unrelated isolation events). Its default is CONDITIONAL: on whenever MS/MS frames
+# are being filtered (denoise_msms or all_frames), off otherwise. That cannot be
+# written as a static value, so the key is left unset here and the code default
+# applies. Setting dia_per_window = false would switch DIA MS/MS back to whole-frame
+# filtering, which is NOT the configuration benchmarked in the paper. Force it either
+# way with --dia-per-window / --no-dia-per-window.
+# dia_per_window = <conditional; see above>
 # Drop MS1 points whose (m/z, mobility) falls outside every isolation window — i.e.
 # precursors the method never fragments. Windows are padded in physical units (Da
 # and 1/K0) so an edge precursor keeps its full isotopic envelope. No effect on
-# ddaPASEF. Enable with dia_ms1_window = true (--dia-ms1-window).
-dia_ms1_window = false
+# ddaPASEF. On by default; set dia_ms1_window = false (or --no-dia-ms1-window) to
+# disable.
+dia_ms1_window = true
 # m/z leniency added to each side of every window, in Daltons.
 dia_ms1_mz_pad = 5.0
 # Ion-mobility leniency added to each side of every window, in 1/K0.
 dia_ms1_im_pad = 0.05
 
-# --- MS1 selection-polygon gate (ddaPASEF/PASEF; off by default) ---
+# --- MS1 selection-polygon gate (ddaPASEF/PASEF) ---
 # Drop MS1 points outside the run's instrument selection polygon (the IMS
 # PolygonFilter stored in analysis.tdf): the (m/z, 1/K0) region the method
 # restricts precursor selection to. Signal outside it is never a precursor
 # (background, singly-charged hump, out-of-range ions), so it is MS1 noise. The
 # polygon comes from the data and is converted to (scan, TOF index) once via the
-# run calibration. Auto-detected: no-op when the run stores no polygon. Enable
-# with ms1_polygon = true (--ms1-polygon).
-ms1_polygon = false
+# run calibration. On by default; auto-detected, so it is a silent no-op when the
+# run stores no polygon or defines a diaPASEF window scheme. Set ms1_polygon =
+# false (or --no-ms1-polygon) to disable.
+ms1_polygon = true
 # m/z leniency added to each side of the polygon, in Daltons (keeps an edge
-# precursor's isotopic envelope). 0 = literal polygon.
-ms1_polygon_mz_pad = 0.0
+# precursor's isotopic envelope). 0 = literal polygon. Default matches the
+# diaPASEF MS1 gate's dia_ms1_mz_pad.
+ms1_polygon_mz_pad = 5.0
 # Ion-mobility leniency added to each side, in 1/K0. 0 = literal polygon.
-ms1_polygon_im_pad = 0.0
+# Default matches dia_ms1_im_pad.
+ms1_polygon_im_pad = 0.05
 
 # --- Experimental pre-filter smoothing ---
 # Replace each MS1 frame with the centered running average of its 2r+1

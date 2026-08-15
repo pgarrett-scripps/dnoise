@@ -65,6 +65,9 @@ pub struct Config {
     pub dia_window: Option<bool>,
     pub dia_window_scan_pad: Option<u32>,
     pub dia_per_window: Option<bool>,
+    // ddaPASEF MS/MS out-of-window gate.
+    pub dda_window: Option<bool>,
+    pub dda_window_scan_pad: Option<u32>,
     pub dia_ms1_window: Option<bool>,
     pub dia_ms1_mz_pad: Option<f64>,
     pub dia_ms1_im_pad: Option<f64>,
