@@ -1,0 +1,5 @@
+# Pin the toolchain used to build dnoise for the paper (see Performance / SI
+# Reproducibility). Cargo.toml's rust-version = "1.85" is the minimum supported
+# (MSRV); this file pins the exact toolchain the published binary was built with.
+[toolchain]
+channel = "1.97.1"

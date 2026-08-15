@@ -62,7 +62,7 @@ jobs:
           mkdir -p "$stage" dist
           cp "target/release/dnoise${{ matrix.ext }}" "$stage"/
           cp "target/release/dnoise-gui${{ matrix.ext }}" "$stage"/
-          cp README.md LICENSE-MIT "$stage"/ 2>/dev/null || true
+          cp README.md LICENSE "$stage"/ 2>/dev/null || true
           if [ "${{ matrix.archive }}" = "zip" ]; then
             7z a "dist/$stage.zip" "$stage"
           else

@@ -332,18 +332,17 @@ iteration monotonicity; `tests/average.rs` covers the running-average pre-pass.
 
 ## Reproducing the paper
 
-The manuscript, its Supporting Information, and the exact code and configuration
-they describe live on the [`paper`](../../tree/paper) branch, not here. That
-branch is frozen, so every figure, table, and PDF can be regenerated as
-published, while `main` tracks ongoing development and its defaults may move.
-Start from that branch's `benchmark/README.md`, which lists, in order, the
-commands that rebuild each manuscript asset from the raw `.d` files (PRIDE
-[PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)).
+The manuscript, its Supporting Information, and the benchmark suite that
+produced them (configs, scripts, and the frozen dnoise source they ran
+against) live in a separate repository, which will be linked here and
+archived with a DOI when the paper is published. It rebuilds every figure
+and table from the raw `.d` files on PRIDE
+([PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)).
 
-The benchmark suite is also kept here under [`benchmark/`](benchmark/), where it
-follows `main`; use the `paper` branch's copy to reproduce published numbers.
-Rust deps are pinned in `Cargo.lock`; the Python analysis env is pinned in
-`benchmark/pyproject.toml` + `benchmark/uv.lock` (run via `uv`).
+This repository tracks ongoing development, so its defaults may move past
+the published configuration. Rust dependencies are pinned in `Cargo.lock`,
+and `rust-toolchain.toml` pins the exact toolchain the paper binary was
+built with.
 
 ## Citing this work
 
