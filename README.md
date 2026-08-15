@@ -96,11 +96,10 @@ A lower-level API exposes the filter on in-memory frames (`FlatFrame`,
 
 ## Compatibility
 
-Output is always compression **type 2**, byte-layout compatible with the
-Bruker SDK / `timsdata` DLL. Validate any output with
-`cargo run --release --example validate -- <PATH.d>`. Type-3
-(zstd + bitshuffle) *input* is not yet readable, see the
-[reference](docs/reference.md#limitation-input-compression-type).
+dnoise reads compression **type 2** (and uncompressed) `.d` input and always
+writes type 2, byte-layout compatible with the Bruker SDK / `timsdata` DLL.
+Validate any output with
+`cargo run --release --example validate -- <PATH.d>`.
 
 ## Reproducing the paper
 

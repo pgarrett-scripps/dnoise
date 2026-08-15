@@ -255,10 +255,7 @@ straight from `analysis.tdf_bin` and compare to timsrust):
 cargo run --release --example check_codec -- <PATH.d> [num_frames]
 ```
 
-## Limitation: input compression type
+## Compression types
 
 dnoise reads **compression type 2** (and uncompressed) input and always writes
-type 2. It cannot yet read **type 3** (zstd + bitshuffle) `.d` files: timsrust's
-`timscompress` feature depends on a `timscompress` crate that is only a stub on
-crates.io, so the decoder does not build. Type-3 support is blocked on that
-crate being published.
+type 2.

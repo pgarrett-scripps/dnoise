@@ -47,10 +47,6 @@ required-features = ["cli"]
 rayon = "1.12.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2.0.18"
-# NOTE: the `timscompress` feature (needed to read compression-type-3 / zstd+bitshuffle
-# .d files) is omitted because the published `timscompress` crate (0.1.0) is an empty
-# placeholder, so the feature does not compile. dnoise reads type-2 / uncompressed input
-# and always writes type-2; type-3 input support is blocked on upstream publishing timscompress.
 timsrust = { version = "0.4.2" }
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
