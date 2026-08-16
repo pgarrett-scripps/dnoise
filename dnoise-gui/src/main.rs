@@ -22,6 +22,18 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "dnoise",
         native_options,
-        Box::new(|_cc| Ok(Box::new(DnoiseApp::default()))),
+        Box::new(|_cc| {
+            let mut app = DnoiseApp::default();
+            // Directories passed on the command line (Explorer context menu,
+            // drag-onto-exe) are queued as inputs. add_path validates that each
+            // is a .d folder and logs a skip note otherwise.
+            for arg in std::env::args_os().skip(1) {
+                let p = std::path::PathBuf::from(arg);
+                if p.is_dir() {
+                    app.add_path(p);
+                }
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Windows installer** (`installer/dnoise.iss`, built on the release runner):
+  per-user Inno Setup installer for the CLI and GUI, with optional tasks that
+  add a "Denoise with dnoise" entry to the Explorer right-click menu of `.d`
+  folders (via `HKCU\Software\Classes\Directory\shell` with an `AppliesTo`
+  filter) and append the install dir to the per-user PATH. The release
+  workflow smoke-tests silent install, registry keys, and uninstall.
+- **GUI: command-line paths.** `dnoise-gui` now queues every directory passed
+  on its command line as an input, which powers the context-menu entry and
+  makes dragging a `.d` folder onto the exe work.
+- **Embedded Windows icon** (`assets/dnoise.ico`, `build.rs` in both crates via
+  `winresource`, Windows hosts only). No effect on other platforms or on
+  `cargo install dnoise`.
+- **CI: Windows job** (`cargo check` + `cargo test` on `windows-latest`), so
+  Windows breakage surfaces at PR time instead of release time.
+
 ## [0.1.0] - 2026-08-14
 
 First public release.

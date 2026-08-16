@@ -58,7 +58,7 @@ impl DnoiseApp {
     /// Add one folder to the queue, validating it looks like a `.d` and detecting
     /// its acquisition scheme for the list. Duplicates and non-`.d` folders are
     /// skipped with a log note.
-    fn add_path(&mut self, p: PathBuf) {
+    pub(crate) fn add_path(&mut self, p: PathBuf) {
         if !p.join("analysis.tdf").is_file() {
             self.log
                 .push(format!("skipped {}: not a .d folder", p.display()));

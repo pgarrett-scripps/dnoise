@@ -30,6 +30,16 @@ cargo install dnoise
 Or download a prebuilt binary (CLI + GUI, Linux/macOS/Windows) from the
 [releases page](https://github.com/pgarrett-scripps/dnoise/releases).
 
+### Windows installer
+
+The releases page also has `dnoise-setup-<version>-windows-x86_64.exe`, a
+per-user installer (no admin rights needed) for the CLI and GUI. It can
+optionally add **"Denoise with dnoise"** to the right-click menu of `.d`
+folders (on Windows 11 it sits under **Show more options**) and put `dnoise`
+on your PATH (reopen any terminals afterwards). The binaries are unsigned,
+so SmartScreen will warn on first run: click **More info**, then
+**Run anyway**.
+
 ## Usage
 
 The defaults are the configuration benchmarked in the paper, so no flags are

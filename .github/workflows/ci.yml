@@ -51,6 +51,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets
 
+  # Windows breakage (path handling, linker, the winresource build script) used
+  # to surface only at release time. No fmt/clippy here, those are
+  # platform-independent and the Linux job enforces them.
+  windows:
+    name: windows check + test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+      - run: cargo test --workspace
+
   # What a crate consumer actually gets. `cargo test --workspace` always builds
   # with default features, so nothing here exercised the library without the CLI
   # -- and the feature gating is hand-written, so it can and does drift.

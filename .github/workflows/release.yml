@@ -69,6 +69,54 @@ jobs:
             tar czf "dist/$stage.tar.gz" "$stage"
           fi
 
+      # The Windows leg also ships an Inno Setup installer (per-user, optional
+      # Explorer context menu on .d folders + PATH). It lands in dist/ so the
+      # existing upload and release-attach steps pick it up unchanged.
+      - name: Build installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Inno Setup 6 is preinstalled on windows-latest images; choco is an
+          # idempotent fallback in case an image drops it.
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          & $iscc /DAppVersion=$version /Odist installer\dnoise.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem dist
+
+      - name: Smoke test installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\dnoise-setup-*.exe | Select-Object -First 1
+          Start-Process -Wait $setup.FullName -ArgumentList `
+            '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=contextmenu,addtopath'
+          $app = "$env:LOCALAPPDATA\Programs\dnoise"
+          foreach ($f in 'dnoise.exe','dnoise-gui.exe') {
+            if (-not (Test-Path "$app\$f")) { throw "$f missing after install" }
+          }
+          & "$app\dnoise.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "dnoise --version failed" }
+          reg query "HKCU\Software\Classes\Directory\shell\dnoise" /v AppliesTo
+          if ($LASTEXITCODE -ne 0) { throw "AppliesTo value missing" }
+          reg query "HKCU\Software\Classes\Directory\shell\dnoise\command" /ve
+          if ($LASTEXITCODE -ne 0) { throw "command key missing" }
+          # The uninstaller respawns itself as a temp copy and the original
+          # process exits early, so poll for cleanup instead of trusting -Wait.
+          Start-Process -Wait "$app\unins000.exe" -ArgumentList `
+            '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path "$app\dnoise.exe") -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+          }
+          if (Test-Path "$app\dnoise.exe") { throw "uninstall left dnoise.exe behind" }
+          reg query "HKCU\Software\Classes\Directory\shell\dnoise" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "context menu key survived uninstall" }
+          exit 0
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:

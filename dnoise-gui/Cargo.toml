@@ -19,3 +19,7 @@ dnoise = { path = "..", default-features = false, features = ["config"] }
 eframe = "0.31"
 # Minimal JSON for the optional per-run report.
 serde_json = "1.0"
+
+# Windows-only, host-gated: build.rs embeds ../assets/dnoise.ico into the exe.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
