@@ -257,5 +257,5 @@ cargo run --release --example check_codec -- <PATH.d> [num_frames]
 
 ## Compression types
 
-dnoise reads **compression type 2** (and uncompressed) input and always writes
+dnoise reads **compression type 2** input and always writes
 type 2.

@@ -96,19 +96,21 @@ A lower-level API exposes the filter on in-memory frames (`FlatFrame`,
 
 ## Compatibility
 
-dnoise reads compression **type 2** (and uncompressed) `.d` input and always
+dnoise reads compression **type 2** `.d` input and always
 writes type 2, byte-layout compatible with the Bruker SDK / `timsdata` DLL.
 Validate any output with
 `cargo run --release --example validate -- <PATH.d>`.
 
 ## Reproducing the paper
 
-The manuscript, its Supporting Information, and the benchmark suite that
-produced them (configs, scripts, and the frozen dnoise source they ran
-against) live in a separate repository, which will be linked here and
-archived with a DOI when the paper is published. It rebuilds every figure
-and table from the raw `.d` files on PRIDE
-([PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)).
+The accompanying manuscript evaluates the immutable
+[dnoise v0.1.0 release](https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.1.0),
+which is also archived on Zenodo under
+[10.5281/zenodo.21959649](https://doi.org/10.5281/zenodo.21959649). The raw
+benchmark `.d` files are public on PRIDE
+([PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)); the
+manuscript and Supporting Information report the complete dnoise parameters
+and downstream search settings.
 
 ## Citing this work
 
@@ -119,8 +121,9 @@ and each tagged release is archived on Zenodo.
 > Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.1.0) [Software].
 > Zenodo. https://doi.org/10.5281/zenodo.21959649
 
-The accompanying paper is in preparation. Its citation will be added here on
-publication.
+The accompanying paper is being prepared for submission to the *Journal of
+the American Society for Mass Spectrometry*. Its preprint and journal citation
+will be added here when available.
 
 ## License
 
