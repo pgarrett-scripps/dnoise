@@ -131,6 +131,7 @@ pub(crate) fn build_msms_keep(
     windows: &[PasefWindow],
     params: &MsmsFilterParams,
     halo: Option<&HaloParams>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<MsmsKeep> {
     let max_prec = windows.iter().map(|w| w.precursor).max().unwrap_or(0) as usize;
     let mut sb0 = vec![u32::MAX; max_prec + 1];
@@ -152,6 +153,9 @@ pub(crate) fn build_msms_keep(
     // Accumulate a precursor's fragment points across all its frames.
     let mut raw: Vec<Vec<(u32, u32, u32)>> = vec![Vec::new(); max_prec + 1];
     for (i, m) in meta.iter().enumerate() {
+        if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(crate::DnoiseError::Cancelled);
+        }
         if m.num_peaks == 0 {
             continue;
         }
@@ -177,14 +181,17 @@ pub(crate) fn build_msms_keep(
         .into_par_iter()
         .enumerate()
         .map(|(p, pts)| {
-            if p == 0 || pts.is_empty() {
+            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(crate::DnoiseError::Cancelled);
+            }
+            Ok(if p == 0 || pts.is_empty() {
                 HashSet::new()
             } else {
                 let num_local = se0[p].saturating_sub(sb0[p]) as usize;
                 combine_and_filter(&pts, sb0[p], num_local, &fp, halo)
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     Ok(MsmsKeep {
         keep,

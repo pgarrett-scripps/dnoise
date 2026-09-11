@@ -2,7 +2,7 @@
 //! frames (re-encoded as type 2), and fix up the `analysis.tdf` SQLite database.
 
 use crate::box_centroid::box_centroid;
-use crate::codec::encode_frame_type2;
+use crate::codec::try_encode_frame_type2;
 use crate::crop::CropGate;
 use crate::dia_ms1::{DiaMs1Gate, TofScanBox};
 use crate::dia_window::{filter_per_window, in_window_mask};
@@ -11,16 +11,17 @@ use crate::filter::filter_iterated;
 use crate::frame::FlatFrame;
 use crate::halo::horizontal_halo_keep_mask;
 use crate::msms::{MsmsKeep, build_msms_keep};
+use crate::neighbor::NeighborIndex;
 use crate::params::{
     CropParams, DiaMs1WindowParams, FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams,
     Stages,
 };
 use crate::polygon::PolygonGate;
+use crate::provenance::NeighborUsage;
 use crate::smooth::box_average;
-use crate::tdf::{self, DiaWindows, FrameUpdate};
+use crate::tdf::{self, DiaWindows, FrameUpdate, PrmWindows};
 use crate::watershed::watershed_centroid;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
@@ -39,7 +40,7 @@ const CHUNK: usize = 2048;
 const MAX_CENTROIDS: usize = 100_000;
 
 /// Summary returned by [`denoise`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 #[non_exhaustive]
 pub struct DenoiseStats {
     /// Total frames in the run (MS1 + MS/MS + empty).
@@ -65,8 +66,32 @@ pub struct DenoiseStats {
     pub raw_summed_intensity: u64,
     /// Summed intensity of all kept points.
     pub kept_summed_intensity: u64,
+    /// Input MS1 summed intensity, including RT-cropped frames.
+    pub raw_ms1_summed_intensity: u64,
+    /// Output MS1 summed intensity after all enabled stages.
+    pub kept_ms1_summed_intensity: u64,
+    /// Input MS/MS summed intensity, including RT-cropped frames.
+    pub raw_msms_summed_intensity: u64,
+    /// Output MS/MS summed intensity after all enabled stages.
+    pub kept_msms_summed_intensity: u64,
+    /// Actual MS1 temporal evidence (central frames are excluded).
+    pub ms1_neighbor_usage: NeighborUsage,
+    /// Actual PRM/DIA temporal evidence (central events are excluded).
+    pub msms_neighbor_usage: NeighborUsage,
     /// True when this was a dry run (no output written).
     pub dry_run: bool,
+    /// Actual input frame binary size, not a point-count estimate.
+    pub input_binary_bytes: u64,
+    /// Actual output frame binary size (zero for a dry run).
+    pub output_binary_bytes: u64,
+    /// Elapsed processing/validation time in seconds.
+    pub elapsed_seconds: f64,
+    /// Worker pool size actually used by this run.
+    pub worker_threads: usize,
+    /// Active geometry gates, after acquisition detection.
+    pub active_gates: crate::provenance::ActiveGates,
+    /// Multiple calibration segments were detected for physical gates or crops.
+    pub multiple_calibrations: bool,
 }
 
 /// Progress update passed to the callback of [`denoise_with_progress`].
@@ -105,15 +130,21 @@ pub struct RunOptions<'a> {
     pub crop: Option<&'a CropParams>,
     /// Skip all denoising (vertical filter, halo, gates, centroiders) and only
     /// apply the crop — carve a subset `.d` without altering retained signal.
-    /// Requires `crop` to be set; ignored otherwise.
+    /// Requires at least one crop bound; invalid configurations return an error.
     pub crop_only: bool,
     /// Dry-run frame sampling for a fast reduction estimate (`None` = all frames).
     /// Only honoured together with `dry_run`.
     pub sample: Option<SampleSpec>,
     /// Cooperative cancellation token. When set and flipped to `true`, the run
-    /// stops at the next frame-chunk boundary and returns [`DnoiseError::Cancelled`];
-    /// the caller should discard any partial output. `None` = never cancelled.
+    /// stops before another frame starts (in-flight frames finish) and returns [`DnoiseError::Cancelled`];
+    /// partial temporary output is removed automatically. `None` = never cancelled.
     pub cancel: Option<&'a AtomicBool>,
+    /// Maximum frames encoded per batch. None preserves the default (2048).
+    pub frame_batch_size: Option<usize>,
+    /// Skip separate full-frame decoding passes on input and output. Structural
+    /// checks, checked encoding, path protection, and staged installation remain.
+    /// False by default. Damage detectable only by decoding may go undetected.
+    pub skip_validation: bool,
 }
 
 /// Deterministic per-frame selector for dry-run sampling: hash `(seed, index)`
@@ -166,7 +197,66 @@ pub fn denoise_with_options<F: FnMut(Progress)>(
     options: &RunOptions,
     progress: F,
 ) -> Result<DenoiseStats> {
-    run(input, output, params, stages, options, progress)
+    execute(input, output, params, stages, options, progress, false)
+}
+
+/// Replace an input only after successfully processing and validating a temporary copy.
+/// A failed installation restores the original or reports its preserved backup path.
+pub fn denoise_in_place<F: FnMut(Progress)>(
+    input: &Path,
+    params: &FilterParams,
+    stages: &Stages,
+    options: &RunOptions,
+    progress: F,
+) -> Result<DenoiseStats> {
+    if options.dry_run {
+        return Err(DnoiseError::InvalidInput(
+            "in-place cannot be a dry run".into(),
+        ));
+    }
+    execute(input, input, params, stages, options, progress, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute<F: FnMut(Progress)>(
+    input: &Path,
+    output: &Path,
+    params: &FilterParams,
+    stages: &Stages,
+    options: &RunOptions,
+    progress: F,
+    in_place: bool,
+) -> Result<DenoiseStats> {
+    let started = std::time::Instant::now();
+    crate::validation::parameters(params, stages, options)?;
+    if !options.dry_run && !in_place {
+        crate::output::check_disjoint(input, output)?;
+    }
+    if options.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(DnoiseError::Cancelled);
+    }
+    crate::validation::inspect_cancellable(input, !options.skip_validation, options.cancel)?;
+    crate::provenance::read(input)?;
+    if options.dry_run {
+        let mut stats = run(input, output, params, stages, options, progress)?;
+        stats.elapsed_seconds = started.elapsed().as_secs_f64();
+        return Ok(stats);
+    }
+    let tx = crate::output::OutputTransaction::begin(
+        input,
+        output,
+        options.force || in_place,
+        in_place,
+    )?;
+    let mut stats = run(input, tx.path(), params, stages, options, progress)?;
+    crate::validation::inspect_cancellable(tx.path(), !options.skip_validation, options.cancel)?;
+    if options.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(DnoiseError::Cancelled);
+    }
+    stats.elapsed_seconds = started.elapsed().as_secs_f64();
+    crate::provenance::write(input, tx.path(), params, stages, options, &stats)?;
+    tx.commit()?;
+    Ok(stats)
 }
 
 /// Like [`denoise`], but invokes `progress` once before processing and again
@@ -184,7 +274,49 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
         force,
         ..RunOptions::default()
     };
-    run(input, output, params, stages, &opts, progress)
+    denoise_with_options(input, output, params, stages, &opts, progress)
+}
+
+/// The writer and streaming reader use the same acquisition policy. Targeted,
+/// mixed and unknown runs may use the MS1 filter, but never discovery geometry
+/// or the whole-frame MS/MS fallback. Cropping remains an explicit operation.
+fn acquisition_stages<'a>(
+    acquisition: crate::Acquisition,
+    stages: &Stages<'a>,
+    crop_only: bool,
+) -> Result<Stages<'a>> {
+    let mut effective = *stages;
+    if matches!(
+        acquisition,
+        crate::Acquisition::PrmPasef | crate::Acquisition::Mixed | crate::Acquisition::Unknown
+    ) {
+        if !crop_only && acquisition == crate::Acquisition::PrmPasef && stages.filter_all_frames {
+            return Err(DnoiseError::InvalidInput(
+                "--all-frames (filter_all_frames) is unsupported for prm-PASEF; use --denoise-msms for experimental per-event fragment filtering".into()
+            ));
+        }
+        if !crop_only
+            && acquisition != crate::Acquisition::PrmPasef
+            && (stages.denoise_msms.is_some() || stages.filter_all_frames)
+        {
+            return Err(DnoiseError::InvalidInput(format!(
+                "MS/MS denoising is not supported for {acquisition}; use MS1-only processing (disable denoise_msms and filter_all_frames)"
+            )));
+        }
+        if crop_only || acquisition != crate::Acquisition::PrmPasef {
+            effective.denoise_msms = None;
+        }
+        effective.filter_all_frames = false;
+        effective.ms1_polygon = None;
+        effective.dia_ms1 = None;
+        effective.dia_window = None;
+        effective.dda_window = None;
+        effective.dia_per_window = false;
+    }
+    if acquisition == crate::Acquisition::DiaPasef && stages.neighbors.dia_radius > 0 {
+        effective.dia_per_window = true;
+    }
+    Ok(effective)
 }
 
 /// The full pipeline behind every public entry point. Reads the input `.d`, builds
@@ -200,13 +332,31 @@ fn run<F: FnMut(Progress)>(
     mut progress: F,
 ) -> Result<DenoiseStats> {
     let &RunOptions {
-        force,
+        force: _,
         dry_run,
         crop,
         crop_only,
         sample,
         cancel,
+        frame_batch_size,
+        skip_validation: _,
     } = options;
+    let in_tdf = input.join("analysis.tdf");
+    let in_bin = input.join("analysis.tdf_bin");
+    if !in_tdf.is_file() || !in_bin.is_file() {
+        return Err(DnoiseError::NotADotD(input.to_path_buf()));
+    }
+
+    // Frame metadata (ordered by Id == timsrust index). Empty frames are handled
+    // without timsrust, which cannot decode their absent payload.
+    let meta = tdf::read_frame_meta(&in_tdf)?;
+
+    let acquisition = tdf::inspect_acquisition(&in_tdf, &meta)?;
+    let scheme = acquisition.kind;
+    let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
+    let n_frames = reader.len();
+    let effective_stages = acquisition_stages(scheme, stages, crop_only)?;
+    let stages = &effective_stages;
     // Unpack the stages this function builds gates from; the per-frame stages
     // (smoothing, centroiding, etc.) are forwarded to `process_frame` via `stages`.
     let &Stages {
@@ -220,47 +370,24 @@ fn run<F: FnMut(Progress)>(
         ..
     } = stages;
 
-    let in_tdf = input.join("analysis.tdf");
-    let in_bin = input.join("analysis.tdf_bin");
-    if !in_tdf.is_file() || !in_bin.is_file() {
-        return Err(DnoiseError::NotADotD(input.to_path_buf()));
-    }
-    // A dry run never writes, so the output folder is left completely untouched.
+    let neighbors = if crop_only {
+        None
+    } else {
+        NeighborIndex::build(&in_tdf, &meta, scheme, stages)?
+    };
+
+    // Destination is an owned temporary directory; the transaction installs it later.
     if !dry_run {
-        if output.exists() {
-            if force {
-                fs::remove_dir_all(output)?;
-            } else {
-                return Err(DnoiseError::OutputExists(output.to_path_buf()));
-            }
-        }
-        // Copy everything except the binary (we regenerate that), so
-        // calibration.sqlite, analysis.tdf, etc. come along.
         copy_dir_except(input, output, "analysis.tdf_bin")?;
     }
-
-    let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
-    let n_frames = reader.len();
-    // Frame metadata (ordered by Id == timsrust index). Empty frames are handled
-    // without timsrust, which cannot decode their absent payload.
-    let meta = tdf::read_frame_meta(&in_tdf)?;
-
-    // Frame inventory + acquisition scheme, logged up front so a caller (human or
-    // agent) can see what kind of run this is and how much work it entails before
-    // any frames are written. Scheme is read straight off `MsMsType` (8 = ddaPASEF,
-    // 9 = diaPASEF) — no extra table reads.
     let n_ms1 = meta.iter().filter(|m| m.is_ms1()).count();
     let n_empty = meta.iter().filter(|m| m.num_peaks == 0).count();
-    let scheme = if meta.iter().any(|m| m.ms_ms_type == 9) {
-        "diaPASEF"
-    } else if meta.iter().any(|m| m.ms_ms_type == 8) {
-        "ddaPASEF"
-    } else {
-        "MS1-only/unknown"
-    };
+    if n_ms1 == 0 && !crop_only && stages.denoise_msms.is_none() && !stages.filter_all_frames {
+        warn!("no MS1 frames; MS1-only denoising will retain all points");
+    }
     info!(input = %input.display(), output = %output.display(), "denoise: starting");
     info!(
-        scheme,
+        scheme = %scheme,
         frames = n_frames,
         ms1 = n_ms1,
         msms = n_frames - n_ms1,
@@ -268,32 +395,31 @@ fn run<F: FnMut(Progress)>(
         "denoise: frame inventory"
     );
 
-    // MS1 subsequence used by the running-average pre-filter: `ms1_indices` maps a
-    // position in the MS1-only stream to a global frame index; `ms1_pos` is the
-    // reverse (None for MS/MS frames). The window skips interleaved MS/MS frames.
-    let ms1_indices: Vec<usize> = (0..n_frames).filter(|&i| meta[i].is_ms1()).collect();
-    let mut ms1_pos: Vec<Option<usize>> = vec![None; n_frames];
-    for (p, &gi) in ms1_indices.iter().enumerate() {
-        ms1_pos[gi] = Some(p);
-    }
-
-    // MS/MS denoising splits by acquisition scheme, both driven by the same
+    // MS/MS denoising splits by acquisition scheme, driven by the same
     // `denoise_msms` params:
     //   * ddaPASEF — each precursor is re-isolated across several frames, so we
     //     build per-precursor keep sets up front (PasefFrameMsMsInfo) and combine
     //     a precursor's fragment scans across frames before filtering.
-    //   * diaPASEF — has no PasefFrameMsMsInfo (each isolation window is sampled
-    //     once per cycle, nothing to combine). We detect this by an empty
-    //     ddaPASEF window table and instead run the same MS/MS filter on each
-    //     whole MS/MS frame as-is (the `dia_msms` path in `process_frame`).
+    //   * diaPASEF — each isolation window is filtered independently by default;
+    //     optional neighbors provide evidence across compatible observations.
+    //   * prm-PASEF — recorded target boundaries are always enforced, including
+    //     when nearby observations supply temporal evidence.
+    let prm_windows = (scheme == crate::Acquisition::PrmPasef && denoise_msms.is_some())
+        .then_some(acquisition.prm_windows);
+    if prm_windows.is_some() {
+        warn!(
+            "experimental prm-PASEF MS/MS denoising: target boundaries enforced; validate downstream quantification"
+        );
+    }
     let (msms_keep, dia_msms) = match denoise_msms {
+        Some(_) if prm_windows.is_some() => (None, None),
         Some(mp) => {
             let windows = tdf::read_pasef_msms(&in_tdf)?;
             if windows.is_empty() {
                 info!("MS/MS denoise: diaPASEF whole-frame path (no PasefFrameMsMsInfo)");
                 (None, Some(mp))
             } else {
-                let keep = build_msms_keep(&reader, &meta, &windows, mp, halo)?;
+                let keep = build_msms_keep(&reader, &meta, &windows, mp, halo, cancel)?;
                 info!(
                     isolation_events = windows.len(),
                     "MS/MS denoise: ddaPASEF per-precursor path"
@@ -321,6 +447,15 @@ fn run<F: FnMut(Progress)>(
         None
     };
     let dia_windows_ref = dia_windows.as_ref();
+    let dia_regions = if scheme == crate::Acquisition::DiaPasef
+        && dia_per_window
+        && (denoise_msms.is_some() || stages.filter_all_frames)
+        && !crop_only
+    {
+        Some(tdf::dia::read(&in_tdf)?)
+    } else {
+        None
+    };
 
     // ddaPASEF isolation-event intervals for the MS/MS out-of-window gate, in the
     // same per-frame shape as the diaPASEF scheme. Empty for diaPASEF (no
@@ -345,7 +480,7 @@ fn run<F: FnMut(Progress)>(
 
     // diaPASEF MS1 out-of-window gate: build the padded `(scan, TOF)` lookup once
     // from the isolation windows + calibration. `None` for ddaPASEF (no windows).
-    let dia_ms1_gate = match dia_ms1 {
+    let dia_ms1_gate = match dia_ms1.filter(|_| !crop_only) {
         Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta)?,
         None => None,
     };
@@ -359,7 +494,7 @@ fn run<F: FnMut(Progress)>(
 
     // MS1 selection-polygon gate: build the per-scan TOF lookup once from the
     // run's IMS PolygonFilter + calibration. `None` when the run stores no polygon.
-    let polygon_gate = match ms1_polygon {
+    let polygon_gate = match ms1_polygon.filter(|_| !crop_only) {
         Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
         None => None,
     };
@@ -373,30 +508,18 @@ fn run<F: FnMut(Progress)>(
     }
     let polygon_ref = polygon_gate.as_ref();
 
-    // The two gates above were converted from physical units to index space with
-    // the run-level calibration, once. That is exact only while every frame
-    // references one calibration segment; if the file carries more, frames on
-    // other segments see gate boundaries that are slightly offset (ppm-scale),
-    // so say so rather than gating silently.
-    if polygon_ref.is_some() || dia_ms1_ref.is_some() {
-        let (mz_cals, tims_cals) = tdf::count_calibration_segments(&in_tdf)?;
-        if mz_cals > 1 || tims_cals > 1 {
-            warn!(
-                mz_calibrations = mz_cals,
-                tims_calibrations = tims_cals,
-                "run carries multiple calibration segments; the acquisition \
-                 gates were converted with the run-level calibration and may be \
-                 slightly offset on frames referencing other segments"
-            );
-        }
-    }
-
     // Region-of-interest crop: convert the physical `(m/z, 1/K0)` bounds to integer
     // `(TOF, scan)` once via the run calibration (RT bounds are applied per frame
     // below). Applies to every frame — this is a subset of the acquisition, not a
     // signal/noise decision. `None` when no crop is requested or it is RT-only.
     let crop_gate = match crop {
         Some(cp) if !cp.is_empty() => {
+            require_single_calibration(
+                &in_tdf,
+                cp.mz_min.is_some() || cp.mz_max.is_some(),
+                cp.im_min.is_some() || cp.im_max.is_some(),
+                "physical crop (remove the m/z or mobility bounds)",
+            )?;
             let md =
                 MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
             let num_scans = meta.iter().map(|m| m.num_scans).max().unwrap_or(0);
@@ -476,20 +599,22 @@ fn run<F: FnMut(Progress)>(
     });
 
     // Per-run context shared by every frame: the prebuilt MS/MS keep sets and
-    // gates derived above, the crop, plus the MS1-stream index maps. Bundling these
+    // gates derived above, the crop, plus compatible-observation indices. Bundling these
     // keeps `process_frame` to a handful of arguments.
     let ctx = FrameCtx {
         msms: msms_ref,
+        prm_msms: denoise_msms.zip(prm_windows.as_ref()),
         dia_msms,
         dia_windows: dia_windows_ref,
+        dia_regions: dia_regions.as_ref(),
         dda_windows: dda_windows_ref,
         dia_ms1: dia_ms1_ref,
         polygon: polygon_ref,
         crop: crop_ref,
         crop_only,
         rt_keep: &rt_keep,
-        ms1_indices: &ms1_indices,
-        ms1_pos: &ms1_pos,
+        neighbors: neighbors.as_ref(),
+        cancel,
     };
 
     let mut offset: u64 = header_len;
@@ -500,10 +625,14 @@ fn run<F: FnMut(Progress)>(
     let mut kept_ms1: u64 = 0;
     let mut raw_summed: u64 = 0;
     let mut kept_summed: u64 = 0;
+    let mut raw_ms1_summed = 0;
+    let mut kept_ms1_summed = 0;
+    let mut ms1_neighbor_usage = NeighborUsage::default();
+    let mut msms_neighbor_usage = NeighborUsage::default();
     let mut cropped_frames: usize = 0;
     let mut frames_done: usize = 0;
 
-    for chunk in selected.chunks(CHUNK) {
+    for chunk in selected.chunks(frame_batch_size.unwrap_or(CHUNK)) {
         // Cooperative cancellation: check once per chunk (a real run's partial
         // output is incomplete, so the caller discards it on Cancelled).
         if let Some(c) = cancel {
@@ -513,10 +642,18 @@ fn run<F: FnMut(Progress)>(
         }
         let processed: Vec<ProcessedFrame> = chunk
             .par_iter()
-            .map(|&i| process_frame(&reader, &meta, i, params, stages, &ctx))
+            .map(|&i| {
+                if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                    return Err(DnoiseError::Cancelled);
+                }
+                process_frame(&reader, &meta, i, params, stages, &ctx)
+            })
             .collect::<Result<_>>()?;
 
         for pf in processed {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Err(DnoiseError::Cancelled);
+            }
             raw_points += pf.raw_points;
             kept_points += pf.num_peaks;
             raw_summed += pf.raw_summed;
@@ -524,6 +661,11 @@ fn run<F: FnMut(Progress)>(
             if pf.is_ms1 {
                 raw_ms1 += pf.raw_points;
                 kept_ms1 += pf.num_peaks;
+                raw_ms1_summed += pf.raw_summed;
+                kept_ms1_summed += pf.summed_intensities;
+                ms1_neighbor_usage.add(pf.neighbor_usage);
+            } else {
+                msms_neighbor_usage.add(pf.neighbor_usage);
             }
             if pf.cropped {
                 cropped_frames += 1;
@@ -548,6 +690,7 @@ fn run<F: FnMut(Progress)>(
     }
     if let Some(b) = bin.as_mut() {
         b.flush()?;
+        b.get_ref().sync_all()?;
     }
     drop(bin);
 
@@ -584,11 +727,54 @@ fn run<F: FnMut(Progress)>(
         kept_ms1_points: kept_ms1,
         raw_summed_intensity: raw_summed,
         kept_summed_intensity: kept_summed,
+        raw_ms1_summed_intensity: raw_ms1_summed,
+        kept_ms1_summed_intensity: kept_ms1_summed,
+        raw_msms_summed_intensity: raw_summed - raw_ms1_summed,
+        kept_msms_summed_intensity: kept_summed - kept_ms1_summed,
+        ms1_neighbor_usage,
+        msms_neighbor_usage,
         dry_run,
+        input_binary_bytes: fs::metadata(&in_bin)?.len(),
+        output_binary_bytes: if dry_run {
+            0
+        } else {
+            fs::metadata(output.join("analysis.tdf_bin"))?.len()
+        },
+        elapsed_seconds: 0.0,
+        worker_threads: rayon::current_num_threads(),
+        active_gates: crate::provenance::ActiveGates {
+            ms1_neighbors: neighbors.is_some() && stages.frame_half_width > 0 && n_ms1 > 0,
+            prm_neighbors: neighbors.is_some()
+                && stages.neighbors.prm_radius > 0
+                && scheme == crate::Acquisition::PrmPasef,
+            dia_neighbors: neighbors.is_some()
+                && stages.neighbors.dia_radius > 0
+                && scheme == crate::Acquisition::DiaPasef,
+            dia_scan_varying: dia_regions.as_ref().is_some_and(|r| r.has_scanning()),
+            prm_per_event: prm_windows.is_some() && !crop_only,
+            ms1_polygon: polygon_ref.is_some() && !crop_only,
+            dia_ms1: dia_ms1_ref.is_some() && !crop_only,
+            dia_window: dia_windows_ref.is_some()
+                && dia_window.is_some()
+                && !crop_only
+                && (stages.filter_all_frames || denoise_msms.is_some()),
+            dda_window: dda_windows_ref.is_some()
+                && !crop_only
+                && (stages.filter_all_frames || denoise_msms.is_some()),
+            dia_per_window: dia_windows_ref.is_some()
+                && dia_per_window
+                && !crop_only
+                && (stages.filter_all_frames || denoise_msms.is_some()),
+        },
+        multiple_calibrations: {
+            let (mz, im) = tdf::count_calibration_segments(&in_tdf)?;
+            mz > 1 || im > 1
+        },
     })
 }
 
 struct ProcessedFrame {
+    neighbor_usage: NeighborUsage,
     frame_id: usize,
     record: Vec<u8>,
     raw_points: u64,
@@ -604,15 +790,19 @@ struct ProcessedFrame {
 }
 
 /// Per-run context for [`process_frame`]: the MS/MS keep sets and gates built
-/// once in [`run`], plus the crop and the MS1-stream index maps. Lets the
+/// once in [`run`], plus the crop and compatible-observation indices. Lets the
 /// per-frame worker take the run's derived state as a single value.
 pub struct FrameCtx<'a> {
+    /// PRM event-local filter knobs and checked, unmerged isolation intervals.
+    prm_msms: Option<(&'a MsmsFilterParams, &'a PrmWindows)>,
     /// ddaPASEF per-precursor keep sets (`None` unless MS/MS denoising on ddaPASEF).
     msms: Option<&'a MsmsKeep>,
     /// diaPASEF MS/MS filter knobs (`None` unless MS/MS denoising on diaPASEF).
     dia_msms: Option<&'a MsmsFilterParams>,
     /// diaPASEF isolation windows (`None` for ddaPASEF or when unused).
     dia_windows: Option<&'a DiaWindows>,
+    /// Checked static windows and continuous scan-dependent DIA regions.
+    dia_regions: Option<&'a tdf::dia::DiaRegions>,
     /// ddaPASEF isolation-event intervals (`None` for diaPASEF or when unused).
     dda_windows: Option<&'a DiaWindows>,
     /// Built diaPASEF MS1 out-of-window gate (`None` when disabled / ddaPASEF).
@@ -625,10 +815,10 @@ pub struct FrameCtx<'a> {
     crop_only: bool,
     /// Per-frame retention-time keep mask (`false` = emit this frame empty).
     rt_keep: &'a [bool],
-    /// MS1-stream position -> global frame index (running-average pre-filter).
-    ms1_indices: &'a [usize],
-    /// Global frame index -> MS1-stream position (`None` for MS/MS frames).
-    ms1_pos: &'a [Option<usize>],
+    /// Compatible event neighborhoods for temporal filtering evidence.
+    neighbors: Option<&'a NeighborIndex>,
+    /// Cooperative cancellation while decoding supporting observations.
+    cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 /// A frame after every denoising / crop stage has run, but *before* it is
@@ -648,19 +838,14 @@ pub struct DecodedFrame {
     /// Surviving points as integer `(scan, tof_idx, intensity)`, after every
     /// enabled stage (vertical filter, halo, gates, smoothing, centroiding).
     pub survivors: Vec<(u32, u32, u32)>,
-    /// Input point count before filtering. For frames emitted empty without
-    /// decoding (empty payload, RT-cropped) this is the `NumPeaks`/0 the writer
-    /// reported, so a reduction stat still reflects them.
+    /// Input point count before filtering, including RT-cropped frames.
     pub raw_points: u64,
-    /// Summed input intensity (0 for frames emitted empty without decoding).
+    /// Summed decoded input intensity, including RT-cropped frames.
     pub raw_summed: u64,
+    /// Actual temporal evidence used for this frame.
+    pub neighbor_usage: NeighborUsage,
     /// True when this frame was emptied by the retention-time crop.
     pub cropped: bool,
-    /// Re-encode as the canonical *empty* record rather than the survivor
-    /// encoder. Set for frames with no payload and for RT-cropped frames, which
-    /// the pre-streaming writer encoded via `encode_empty_frame_type2`; keeping
-    /// the distinction makes [`process_frame`] byte-identical to that writer.
-    empty_record: bool,
 }
 
 /// Thin file-writer wrapper over [`process_frame_decoded`]: decode the frame's
@@ -679,12 +864,9 @@ fn process_frame(
     let num_peaks = d.survivors.len() as u64;
     let summed_intensities: u64 = d.survivors.iter().map(|&(_, _, it)| it as u64).sum();
     let max_intensity = d.survivors.iter().map(|&(_, _, it)| it).max().unwrap_or(0);
-    let record = if d.empty_record {
-        crate::codec::encode_empty_frame_type2(d.num_scans)
-    } else {
-        encode_frame_type2(d.num_scans, &d.survivors)
-    };
+    let record = try_encode_frame_type2(d.num_scans, &d.survivors)?;
     Ok(ProcessedFrame {
+        neighbor_usage: d.neighbor_usage,
         frame_id: d.frame_id,
         record,
         raw_points: d.raw_points,
@@ -714,7 +896,6 @@ pub fn process_frame_decoded(
     // already consumed into the gates and keep sets held by `ctx`.
     let &Stages {
         filter_all_frames,
-        frame_half_width,
         halo,
         smooth,
         watershed,
@@ -725,22 +906,26 @@ pub fn process_frame_decoded(
         ..
     } = stages;
     let &FrameCtx {
+        prm_msms,
         msms,
         dia_msms,
         dia_windows,
+        dia_regions,
         dda_windows,
         dia_ms1,
         polygon,
         crop,
         crop_only,
         rt_keep,
-        ms1_indices,
-        ms1_pos,
+        neighbors,
+        cancel,
     } = ctx;
     let meta_i = &meta[i];
     let is_ms1 = meta_i.is_ms1();
-    // Empty frames: timsrust cannot decode their absent payload, so emit the
-    // canonical empty record directly (Bruker stores these too).
+    // Empty input frames are not read through timsrust, which cannot decode an
+    // absent payload. They are still WRITTEN the long way (an all-zero scan
+    // table, ~24 compressed bytes) so the output stays readable by timsrust;
+    // see `codec::encode_empty_frame_type2`.
     if meta_i.num_peaks == 0 {
         return Ok(DecodedFrame {
             frame_id: meta_i.id,
@@ -750,25 +935,8 @@ pub fn process_frame_decoded(
             survivors: Vec::new(),
             raw_points: 0,
             raw_summed: 0,
+            neighbor_usage: NeighborUsage::default(),
             cropped: false,
-            empty_record: true,
-        });
-    }
-
-    // Retention-time crop: a frame outside the window is emitted empty without
-    // decoding its payload. Its input points still count toward the raw total (from
-    // `NumPeaks`) so the reported reduction reflects the crop.
-    if !rt_keep[i] {
-        return Ok(DecodedFrame {
-            frame_id: meta_i.id,
-            is_ms1,
-            num_scans: meta_i.num_scans,
-            rt_seconds: meta_i.rt,
-            survivors: Vec::new(),
-            raw_points: meta_i.num_peaks,
-            raw_summed: 0,
-            cropped: true,
-            empty_record: true,
         });
     }
 
@@ -782,44 +950,55 @@ pub fn process_frame_decoded(
     let num_scans = flat.num_scans;
     let frame_id = flat.frame_id;
 
-    // Optional cross-frame combine for the keep/drop DECISION only (frame_half_width
-    // > 0): sum this MS1 frame with its MS1-frame neighborhood into one spectrum,
-    // filter the combined spectrum, and keep this frame's NATIVE points whose
-    // (scan, tof) survive there. Neighbors raise signal-to-noise so a faint but
-    // persistent feature survives, exactly as the ddaPASEF MS/MS path combines a
-    // precursor's re-isolated scans before deciding (msms.rs::combine_and_filter).
-    // Unlike the old running-average smoother it never merges or averages points,
-    // so output stays a subset of the native frame with native intensities.
-    let neighborhood_keys: Option<HashSet<u64>> =
-        if frame_half_width > 0 && meta_i.is_ms1() && meta_i.num_peaks > 0 {
-            let p = ms1_pos[i].expect("MS1 frame must have an MS1-stream position");
-            let lo = p.saturating_sub(frame_half_width);
-            let hi = (p + frame_half_width).min(ms1_indices.len() - 1);
-            let mut neighbors: Vec<FlatFrame> = Vec::with_capacity(hi - lo);
-            for &gi in &ms1_indices[lo..=hi] {
-                if gi == i || meta[gi].num_peaks == 0 {
-                    continue;
-                }
-                let nf = reader.get(gi).map_err(|e| DnoiseError::FrameRead {
-                    index: gi,
-                    message: e.to_string(),
-                })?;
-                neighbors.push(FlatFrame::from_frame(&nf));
-            }
-            let mut window: Vec<&FlatFrame> = neighbors.iter().collect();
-            window.push(&flat);
-            Some(neighborhood_keep_keys(num_scans, &window, params, halo))
-        } else {
-            None
-        };
-    // Filtering, the DIA gates, survivors and any centroiding all operate on the
-    // native frame; the neighborhood only informs the MS1 keep mask above.
+    // Decode RT-excluded frames too: QC denominators must include removed intensity.
+    if !rt_keep[i] {
+        return Ok(DecodedFrame {
+            frame_id: meta_i.id,
+            is_ms1,
+            num_scans: meta_i.num_scans,
+            rt_seconds: meta_i.rt,
+            survivors: Vec::new(),
+            raw_points,
+            raw_summed,
+            neighbor_usage: NeighborUsage::default(),
+            cropped: true,
+        });
+    }
+
+    // Sum compatible local observations only to decide which native points survive.
+    let neighbor_params = if is_ms1 {
+        *params
+    } else {
+        stages
+            .denoise_msms
+            .map(|p| p.as_filter_params())
+            .unwrap_or(*params)
+    };
+    let neighborhood_mask = match neighbors.filter(|_| !crop_only) {
+        Some(n) => n.keep_mask(
+            reader,
+            meta,
+            i,
+            &flat,
+            &neighbor_params,
+            halo,
+            rt_keep,
+            cancel,
+        )?,
+        None => None,
+    };
+    let (neighborhood_mask, neighbor_usage) = match neighborhood_mask {
+        Some((mask, usage)) => (Some(mask), usage),
+        None => (None, NeighborUsage::default()),
+    };
     let to_filter: &FlatFrame = &flat;
 
     // diaPASEF isolation-window scan intervals for this frame (None for MS1, for
     // ddaPASEF, or when neither DIA feature is enabled). Drives both per-window
     // MS/MS filtering and the out-of-window gate below.
-    let dia_iv = dia_windows.and_then(|dw| dw.intervals(meta_i.id));
+    let dia_iv = dia_regions
+        .and_then(|r| r.intervals(meta_i.id))
+        .or_else(|| dia_windows.and_then(|dw| dw.intervals(meta_i.id)));
 
     // MS1 frames: vertical filter then (optional) horizontal-halo on the survivors.
     // MS/MS frames: pruned by the precursor keep sets when MS/MS denoising is on,
@@ -829,11 +1008,8 @@ pub fn process_frame_decoded(
     let mut keep = if crop_only {
         vec![true; to_filter.len()]
     } else if meta_i.is_ms1() {
-        let mut keep = if let Some(keys) = &neighborhood_keys {
-            // Prune native points by the combined-spectrum decision (mirrors MS/MS).
-            (0..to_filter.len())
-                .map(|j| keys.contains(&frame_key(to_filter.scan[j], to_filter.tof[j])))
-                .collect()
+        let mut keep = if let Some(mask) = neighborhood_mask {
+            mask
         } else {
             let mut keep = filter_iterated(to_filter, params);
             if let Some(hp) = halo {
@@ -862,14 +1038,24 @@ pub fn process_frame_decoded(
             }
         }
         keep
+    } else if let Some(mask) = neighborhood_mask {
+        mask
+    } else if let Some((mp, windows)) = prm_msms {
+        let intervals = windows.get(&meta_i.id).ok_or_else(|| {
+            DnoiseError::InvalidInput(format!(
+                "nonempty PRM frame {} has no checked isolation events",
+                meta_i.id
+            ))
+        })?;
+        filter_per_window(to_filter, intervals, &mp.as_filter_params(), halo)
     } else if let Some(mk) = msms {
         mk.keep_mask(to_filter, meta_i.id)
     } else if let Some(mp) = dia_msms {
         // diaPASEF MS/MS: run the same MS/MS filter on each whole frame. With
         // `dia_per_window`, filter each isolation window's scan slice on its own
         // instead, so a mobility run cannot be fused across a window boundary
-        // (cross-talk between unrelated isolation events). No cross-frame combine
-        // (each DIA window is sampled once per cycle); the `msms_*` knobs apply via
+        // (cross-talk between unrelated isolation events). Temporal support, when
+        // enabled, has already supplied the mask above; the `msms_*` knobs apply via
         // FilterParams just like the ddaPASEF path.
         let fp = mp.as_filter_params();
         match dia_iv {
@@ -942,20 +1128,54 @@ pub fn process_frame_decoded(
     // watershed seeds on the stabilised intensities.
     let filtered_here = !crop_only
         && (meta_i.is_ms1() || dia_msms.is_some() || (msms.is_none() && filter_all_frames));
-    let survivors = match smooth {
-        Some(sp) if filtered_here => box_average(&survivors, num_scans, sp),
-        _ => survivors,
+    // PRM postprocessing stays inside each event as well: smoothing and
+    // centroiding must not mix adjacent targets after the keep mask is built.
+    let finish = |points: Vec<(u32, u32, u32)>| {
+        let points = match smooth {
+            Some(sp) => box_average(&points, num_scans, sp),
+            None => points,
+        };
+        let points = match watershed {
+            Some(wp) => watershed_centroid(&points, wp, MAX_CENTROIDS),
+            None => points,
+        };
+        match box_centroid_params {
+            Some(bp) => box_centroid(&points, bp),
+            None => points,
+        }
     };
-    let survivors = match watershed {
-        Some(wp) if filtered_here => watershed_centroid(&survivors, wp, MAX_CENTROIDS),
-        _ => survivors,
+    let postprocess_intervals = if !crop_only && !is_ms1 {
+        neighbors
+            .map(|n| n.intervals(i))
+            .filter(|iv| !iv.is_empty())
+            .or_else(|| {
+                dia_regions
+                    .and_then(|r| r.intervals(meta_i.id))
+                    .map(|iv| iv.to_vec())
+            })
+            .or_else(|| prm_msms.map(|(_, w)| w[&meta_i.id].clone()))
+    } else {
+        None
     };
-    // Optional final stage: greedy small-box centroiding (mutually exclusive with
-    // watershed, enforced by the CLI). Tiles streaks into small centroids rather
-    // than collapsing them, preserving the mobility profile.
-    let survivors = match box_centroid_params {
-        Some(bp) if filtered_here => box_centroid(&survivors, bp),
-        _ => survivors,
+    let survivors = if let Some(intervals) = postprocess_intervals
+        .filter(|_| smooth.is_some() || watershed.is_some() || box_centroid_params.is_some())
+    {
+        intervals
+            .iter()
+            .flat_map(|&(begin, end)| {
+                finish(
+                    survivors
+                        .iter()
+                        .copied()
+                        .filter(|p| p.0 >= begin && p.0 < end)
+                        .collect(),
+                )
+            })
+            .collect()
+    } else if filtered_here {
+        finish(survivors)
+    } else {
+        survivors
     };
 
     Ok(DecodedFrame {
@@ -966,9 +1186,23 @@ pub fn process_frame_decoded(
         survivors,
         raw_points,
         raw_summed,
+        neighbor_usage,
         cropped: false,
-        empty_record: false,
     })
+}
+
+// Raw-coordinate filters and RT/intensity-only crops do not need these conversions.
+fn require_single_calibration(path: &Path, mz: bool, im: bool, operation: &str) -> Result<()> {
+    if !mz && !im {
+        return Ok(());
+    }
+    let (mz_count, im_count) = tdf::count_calibration_segments(path)?;
+    if (mz && mz_count > 1) || (im && im_count > 1) {
+        return Err(DnoiseError::InvalidInput(format!(
+            "{operation} cannot use run-level conversion with multiple calibration references (m/z: {mz_count}, mobility: {im_count}); per-calibration physical filtering is not supported"
+        )));
+    }
+    Ok(())
 }
 
 /// Build the diaPASEF MS1 out-of-window gate: read the isolation windows, pad each
@@ -984,6 +1218,12 @@ fn build_dia_ms1_gate(
     if boxes.is_empty() {
         return Ok(None);
     }
+    require_single_calibration(
+        in_tdf,
+        true,
+        true,
+        "DIA MS1 gate (disable dia_ms1_window / --no-dia-ms1-window)",
+    )?;
     let md = MetadataReader::new(in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
     let num_scans = meta.iter().map(|m| m.num_scans).max().unwrap_or(0);
     if num_scans == 0 {
@@ -1043,6 +1283,12 @@ fn build_polygon_gate(
     let Some((mz, im)) = tdf::read_selection_polygon(in_tdf)? else {
         return Ok(None);
     };
+    require_single_calibration(
+        in_tdf,
+        true,
+        true,
+        "MS1 polygon gate (disable ms1_polygon / --no-ms1-polygon)",
+    )?;
     let md = MetadataReader::new(in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
     let num_scans = meta.iter().map(|m| m.num_scans).max().unwrap_or(0);
     if num_scans == 0 {
@@ -1079,57 +1325,6 @@ fn apply_halo(frame: &FlatFrame, hp: &HaloParams, keep: &mut [bool]) {
     }
 }
 
-/// Pack an absolute `(scan, tof)` into a u64 key (scan in the high 32 bits).
-fn frame_key(scan: u32, tof: u32) -> u64 {
-    ((scan as u64) << 32) | tof as u64
-}
-
-/// Combine an MS1-frame neighborhood into one summed `(scan, tof)` spectrum, run the
-/// vertical + horizontal-halo filter on it, and return the surviving `(scan, tof)`
-/// keys. Used by the `frame_half_width` path: the combined spectrum only informs the
-/// keep/drop decision (raising signal-to-noise for persistent features); the caller
-/// prunes the current frame's native points by these keys, never merging intensities.
-/// Mirrors the ddaPASEF MS/MS combine-then-decide path (`msms.rs::combine_and_filter`).
-fn neighborhood_keep_keys(
-    num_scans: usize,
-    window: &[&FlatFrame],
-    params: &FilterParams,
-    halo: Option<&HaloParams>,
-) -> HashSet<u64> {
-    let mut acc: HashMap<u64, u64> = HashMap::new();
-    for f in window {
-        for k in 0..f.len() {
-            *acc.entry(frame_key(f.scan[k], f.tof[k])).or_insert(0) += f.intensity[k] as u64;
-        }
-    }
-    let mut scan = Vec::with_capacity(acc.len());
-    let mut tof = Vec::with_capacity(acc.len());
-    let mut intensity = Vec::with_capacity(acc.len());
-    for (&k, &sum) in &acc {
-        scan.push((k >> 32) as u32);
-        tof.push((k & 0xFFFF_FFFF) as u32);
-        intensity.push(sum.min(u32::MAX as u64) as u32);
-    }
-    let combined = FlatFrame {
-        frame_id: 0,
-        num_scans,
-        scan,
-        tof,
-        intensity,
-    };
-    let mut keep = filter_iterated(&combined, params);
-    if let Some(hp) = halo {
-        apply_halo(&combined, hp, &mut keep);
-    }
-    let mut out = HashSet::new();
-    for ((&keep_k, &scan), &tof) in keep.iter().zip(&combined.scan).zip(&combined.tof) {
-        if keep_k {
-            out.insert(frame_key(scan, tof));
-        }
-    }
-    out
-}
-
 /// Recursively copy `src` into `dst`, skipping a top-level entry named `skip_top`.
 fn copy_dir_except(src: &Path, dst: &Path, skip_top: &str) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -1138,6 +1333,12 @@ fn copy_dir_except(src: &Path, dst: &Path, skip_top: &str) -> Result<()> {
         let name = entry.file_name();
         let from = entry.path();
         let to = dst.join(&name);
+        if !entry.file_type()?.is_dir() && !entry.file_type()?.is_file() {
+            return Err(DnoiseError::InvalidInput(format!(
+                "non-regular files (including symlinks) inside acquisitions are unsupported: {}",
+                from.display()
+            )));
+        }
         if from.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else if name != skip_top {
@@ -1153,6 +1354,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         let entry = entry?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
+        if !entry.file_type()?.is_dir() && !entry.file_type()?.is_file() {
+            return Err(DnoiseError::InvalidInput(format!(
+                "non-regular files (including symlinks) inside acquisitions are unsupported: {}",
+                from.display()
+            )));
+        }
         if from.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
@@ -1207,14 +1414,15 @@ pub struct RunContext<'a> {
     params: FilterParams,
     stages: Stages<'a>,
     msms_keep: Option<MsmsKeep>,
+    prm_windows: Option<PrmWindows>,
     dia_msms: Option<&'a MsmsFilterParams>,
     dia_windows: Option<DiaWindows>,
+    dia_regions: Option<tdf::dia::DiaRegions>,
     dda_windows: Option<DiaWindows>,
     dia_ms1_gate: Option<DiaMs1Gate>,
     polygon_gate: Option<PolygonGate>,
     rt_keep: Vec<bool>,
-    ms1_indices: Vec<usize>,
-    ms1_pos: Vec<Option<usize>>,
+    neighbors: Option<NeighborIndex>,
     calibration: Calibration,
     n_ms1: usize,
 }
@@ -1223,32 +1431,35 @@ impl<'a> RunContext<'a> {
     /// Open the `.d` and build every per-run gate once. `params` and `stages`
     /// must outlive the context (the DIA MS/MS params are borrowed from `stages`).
     pub fn open(input: &Path, params: &FilterParams, stages: &'a Stages<'a>) -> Result<Self> {
+        crate::validation::parameters(params, stages, &RunOptions::default())?;
         let in_tdf = input.join("analysis.tdf");
         let in_bin = input.join("analysis.tdf_bin");
         if !in_tdf.is_file() || !in_bin.is_file() {
             return Err(DnoiseError::NotADotD(input.to_path_buf()));
         }
 
-        let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
         let meta = tdf::read_frame_meta(&in_tdf)?;
+        let acquisition = tdf::inspect_acquisition(&in_tdf, &meta)?;
+        let scheme = acquisition.kind;
+        let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
+        let effective_stages = acquisition_stages(scheme, stages, false)?;
+        let stages = &effective_stages;
         let n_frames = meta.len();
         let n_ms1 = meta.iter().filter(|m| m.is_ms1()).count();
 
-        // MS1 stream index maps for the cross-frame combine (mirrors `run`).
-        let ms1_indices: Vec<usize> = (0..n_frames).filter(|&i| meta[i].is_ms1()).collect();
-        let mut ms1_pos: Vec<Option<usize>> = vec![None; n_frames];
-        for (p, &gi) in ms1_indices.iter().enumerate() {
-            ms1_pos[gi] = Some(p);
-        }
+        let neighbors = NeighborIndex::build(&in_tdf, &meta, scheme, stages)?;
 
         // MS/MS denoise: ddaPASEF per-precursor keep sets vs diaPASEF whole-frame.
+        let prm_windows = (scheme == crate::Acquisition::PrmPasef && stages.denoise_msms.is_some())
+            .then_some(acquisition.prm_windows);
         let (msms_keep, dia_msms) = match stages.denoise_msms {
+            Some(_) if prm_windows.is_some() => (None, None),
             Some(mp) => {
                 let windows = tdf::read_pasef_msms(&in_tdf)?;
                 if windows.is_empty() {
                     (None, Some(mp))
                 } else {
-                    let keep = build_msms_keep(&reader, &meta, &windows, mp, stages.halo)?;
+                    let keep = build_msms_keep(&reader, &meta, &windows, mp, stages.halo, None)?;
                     (Some(keep), None)
                 }
             }
@@ -1260,6 +1471,15 @@ impl<'a> RunContext<'a> {
         let dia_windows = if stages.dia_window.is_some() || stages.dia_per_window {
             let w = tdf::read_dia_windows(&in_tdf)?;
             if w.is_empty() { None } else { Some(w) }
+        } else {
+            None
+        };
+
+        let dia_regions = if scheme == crate::Acquisition::DiaPasef
+            && stages.dia_per_window
+            && (stages.denoise_msms.is_some() || stages.filter_all_frames)
+        {
+            Some(tdf::dia::read(&in_tdf)?)
         } else {
             None
         };
@@ -1282,22 +1502,6 @@ impl<'a> RunContext<'a> {
             None => None,
         };
 
-        // Mirror `run`'s calibration-segment warning: the physical-unit gates were
-        // converted with the run-level calibration, which is exact only when every
-        // frame references one segment.
-        if polygon_gate.is_some() || dia_ms1_gate.is_some() {
-            let (mz_cals, tims_cals) = tdf::count_calibration_segments(&in_tdf)?;
-            if mz_cals > 1 || tims_cals > 1 {
-                warn!(
-                    mz_calibrations = mz_cals,
-                    tims_calibrations = tims_cals,
-                    "run carries multiple calibration segments; the acquisition \
-                     gates were converted with the run-level calibration and may be \
-                     slightly offset on frames referencing other segments"
-                );
-            }
-        }
-
         // No crop on the streaming path: every frame is in the RT window.
         let rt_keep = vec![true; n_frames];
 
@@ -1313,14 +1517,15 @@ impl<'a> RunContext<'a> {
             params: *params,
             stages: *stages,
             msms_keep,
+            prm_windows,
             dia_msms,
             dia_windows,
+            dia_regions,
             dda_windows,
             dia_ms1_gate,
             polygon_gate,
             rt_keep,
-            ms1_indices,
-            ms1_pos,
+            neighbors,
             calibration,
             n_ms1,
         })
@@ -1356,16 +1561,18 @@ impl<'a> RunContext<'a> {
     pub fn process(&self, i: usize) -> Result<DecodedFrame> {
         let ctx = FrameCtx {
             msms: self.msms_keep.as_ref(),
+            prm_msms: self.stages.denoise_msms.zip(self.prm_windows.as_ref()),
             dia_msms: self.dia_msms,
             dia_windows: self.dia_windows.as_ref(),
+            dia_regions: self.dia_regions.as_ref(),
             dda_windows: self.dda_windows.as_ref(),
             dia_ms1: self.dia_ms1_gate.as_ref(),
             polygon: self.polygon_gate.as_ref(),
             crop: None,
             crop_only: false,
             rt_keep: &self.rt_keep,
-            ms1_indices: &self.ms1_indices,
-            ms1_pos: &self.ms1_pos,
+            neighbors: self.neighbors.as_ref(),
+            cancel: None,
         };
         process_frame_decoded(
             &self.reader,

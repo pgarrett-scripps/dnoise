@@ -19,7 +19,8 @@ identifications. All of those runs used the same default parameters with no
 per-run tuning. They come from one instrument and two gradients, though, so
 other instruments and sample types are untested. Validate on your own data
 before committing: `--dry-run` reports the reduction without writing
-anything, and MS1-only mode (the default) leaves identifications untouched.
+anything. MS1-only mode (the default) preserves MS/MS spectra; validate downstream
+identification and quantification results for your workflow.
 
 ## Install
 
@@ -45,8 +46,8 @@ INFO dnoise::writer: MS1 selection-polygon gate active
 INFO dnoise::writer: denoise: complete frames=8639 raw_points=300509979 kept_points=110092035 kept_pct=36.64
 ```
 
-By default only **MS1** frames are filtered, so MS/MS spectra (and therefore
-identifications) are untouched. Acquisition-aware gates detect whether the
+By default only **MS1** frames are filtered, so MS/MS spectra are
+untouched. Acquisition-aware gates detect whether the
 run is ddaPASEF or diaPASEF and apply the matching geometry automatically. On
 runs where a gate's geometry is absent it is a silent no-op.
 
@@ -54,11 +55,20 @@ Useful variations:
 
 | Command | What it does |
 |---|---|
-| `dnoise in.d --in-place` | Overwrite the input (atomically, with a rollback on failure). |
+| `dnoise in.d --in-place` | Replace input after validation, with recovery on installation failure. |
 | `dnoise in.d out.d --dry-run` | Report the reduction without writing anything. |
 | `dnoise in.d out.d --denoise-msms` | Also denoise MS/MS spectra (changes IDs, re-search to measure). |
 | `dnoise in.d out.d --config my.toml` | Load parameters from a TOML file ([example](dnoise.toml)). |
 | `dnoise in.d out.d --report run.json` | Write effective config + reduction stats as JSON. |
+| `dnoise in.d out.d --skip-validation` | Skip full input/output decoding checks; keep structural and file-safety checks. |
+| `dnoise validate out.d` | Check metadata and decode every output frame. |
+| `dnoise metadata out.d` | Read the processing history stored inside the folder. |
+| `dnoise batch jobs.json` | Process a portable batch manifest. |
+
+Every completed output includes **`dnoise.provenance.json`** (version, exact
+settings, statistics, and processing history) and **`dnoise.config.toml`** (a
+reusable recipe). These files travel with the `.d` folder. See
+[processing metadata](docs/provenance.md) and [batch workflows](docs/batch.md).
 
 Every knob (filter parameters, per-gate control, region-of-interest cropping,
 smoothing and centroiding stages, logging) is documented in the
@@ -94,7 +104,35 @@ A lower-level API exposes the filter on in-memory frames (`FlatFrame`,
 `filter_iterated`) and the type-2 codec directly. See
 [docs.rs](https://docs.rs/dnoise) and [docs/reference.md](docs/reference.md).
 
+## Neighbor support (experimental)
+
+Use nearby matching observations to support weak signals during filtering:
+
+```bash
+dnoise input.d output.d --denoise-msms \
+  --prm-neighbor-radius 1 --dia-neighbor-radius 1 --ms1-neighbor-radius 1
+```
+
+Each radius defaults to **0** (off). `1` uses the previous and next compatible
+observation, within **5 seconds** of the current frame. PRM matches targets; DIA
+matches isolation windows; MS1 skips fragment frames. The combined spectrum only
+informs filtering: output retains native points and intensities unless optional
+smoothing/centroiding is enabled. Quantitative accuracy remains unvalidated.
+See [neighbor options, boundaries, and validation](docs/neighbors.md).
+
 ## Compatibility
+
+Type-2 synchro-PASEF, midia-PASEF, and Slice-PASEF examples are supported through
+the DIA path, including experimental MS/MS and neighbor filtering. See
+[downloaded examples, geometry handling, and validation](docs/acquisition-examples.md).
+
+prm-PASEF type-2 `.d` files support automatic detection and checked target/event
+metadata. By default, only MS1 is denoised and PRM fragments are preserved unless
+explicitly cropped. **`--denoise-msms` enables experimental PRM fragment filtering
+within each isolation event**; validate quantitative results before routine use.
+Discovery acquisition gates stay disabled. `--all-frames` is rejected for PRM;
+mixed/unknown acquisitions reject all fragment denoising. See
+[targeted proteomics support and validation](docs/targeted.md).
 
 dnoise reads compression **type 2** `.d` input and always
 writes type 2, byte-layout compatible with the Bruker SDK / `timsdata` DLL.
@@ -121,9 +159,12 @@ and each tagged release is archived on Zenodo.
 > Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.1.0) [Software].
 > Zenodo. https://doi.org/10.5281/zenodo.21959649
 
-The accompanying paper is being prepared for submission to the *Journal of
+The accompanying paper has been submitted to the *Journal of
 the American Society for Mass Spectrometry*. Its preprint and journal citation
 will be added here when available.
+
+Planned maintenance, usability improvements, and research extensions are in the
+[project roadmap](ROADMAP.md).
 
 ## License
 

@@ -1,0 +1,356 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-09-09",
+  "commands": [
+    "dnoise INPUT OUTPUT --threads 4 --report REPORT",
+    "dnoise INPUT OUTPUT --threads 4 --report REPORT --denoise-msms --dia-neighbor-radius 1"
+  ],
+  "verification": "Independent Bruker SDK decoding of all source and output frames; exact scan/TOF/intensity subset comparison; SQLite schema and metadata comparison. No smoothing or centroiding.",
+  "examples": [
+    {
+      "kind": "synchro",
+      "source": "acquisitions/20220923_TIMS03_PaSk_SA_4prot_200fmol_Evo05_3min_IM0713_classical_SyS_4MS_wCE_S4-G3_1_32594.d",
+      "sdk_sha256": "a97086132c64bed75496f7da02aa43a741a8dba4b1dc031e194cd9c51a6f3e9d",
+      "frames_per_file": 1704,
+      "unchanged_metadata_tables": 17,
+      "default_msms_identical": true,
+      "all_outputs_native_subsets": true,
+      "points_by_level": [
+        {
+          "0": 10554384,
+          "9": 2656690
+        },
+        {
+          "0": 537229,
+          "9": 2656690
+        },
+        {
+          "0": 537229,
+          "9": 875917
+        }
+      ],
+      "native_summed_intensity_by_level": [
+        {
+          "0": 667353607,
+          "9": 146732673
+        },
+        {
+          "0": 123290623,
+          "9": 146732673
+        },
+        {
+          "0": 123290623,
+          "9": 60946967
+        }
+      ],
+      "source_checksums": {
+        "analysis.tdf": "06d0ec5eb1d9520a2aaf8368334a454ae002ef24040aee01f14f9977f907b269",
+        "analysis.tdf_bin": "9fa713602070942c57166f86ba80d1696c30cd7cbfc2e62b32aa13ca350970d1"
+      },
+      "msms_intensity_retained_percent": 41.53605720792669,
+      "output_order": [
+        "input",
+        "default_ms1",
+        "msms_radius_1"
+      ],
+      "run_stats": {
+        "ms1": {
+          "active_gates": {
+            "dda_window": false,
+            "dia_ms1": true,
+            "dia_neighbors": false,
+            "dia_per_window": false,
+            "dia_scan_varying": false,
+            "dia_window": false,
+            "ms1_neighbors": false,
+            "ms1_polygon": false,
+            "prm_neighbors": false,
+            "prm_per_event": false
+          },
+          "cropped_frames": 0,
+          "dry_run": false,
+          "elapsed_seconds": 1.739500526,
+          "frames": 1704,
+          "input_binary_bytes": 45834240,
+          "kept_ms1_points": 537229,
+          "kept_pct": 24.176073799904536,
+          "kept_points": 3193919,
+          "kept_summed_intensity": 270024125,
+          "ms1_frames": 341,
+          "ms1_kept_pct": 5.090102842572338,
+          "msms_frames": 1363,
+          "multiple_calibrations": false,
+          "output_binary_bytes": 11608744,
+          "processed_frames": 1704,
+          "raw_ms1_points": 10554384,
+          "raw_points": 13211074,
+          "raw_summed_intensity": 814087109,
+          "worker_threads": 4
+        },
+        "neighbors": {
+          "active_gates": {
+            "dda_window": false,
+            "dia_ms1": true,
+            "dia_neighbors": true,
+            "dia_per_window": true,
+            "dia_scan_varying": true,
+            "dia_window": true,
+            "ms1_neighbors": false,
+            "ms1_polygon": false,
+            "prm_neighbors": false,
+            "prm_per_event": false
+          },
+          "cropped_frames": 0,
+          "dry_run": false,
+          "elapsed_seconds": 2.053417986,
+          "frames": 1704,
+          "input_binary_bytes": 45834240,
+          "kept_ms1_points": 537229,
+          "kept_pct": 10.696677650885915,
+          "kept_points": 1413146,
+          "kept_summed_intensity": 184238419,
+          "ms1_frames": 341,
+          "ms1_kept_pct": 5.090102842572338,
+          "msms_frames": 1363,
+          "multiple_calibrations": false,
+          "output_binary_bytes": 5023454,
+          "processed_frames": 1704,
+          "raw_ms1_points": 10554384,
+          "raw_points": 13211074,
+          "raw_summed_intensity": 814087109,
+          "worker_threads": 4
+        }
+      }
+    },
+    {
+      "kind": "midia",
+      "source": "acquisitions/NSCtrl_3_midiaPASEF_25x10_OL5_5min_PepSep_4cm_Slot2-33_3_4418.d",
+      "sdk_sha256": "a97086132c64bed75496f7da02aa43a741a8dba4b1dc031e194cd9c51a6f3e9d",
+      "frames_per_file": 4452,
+      "unchanged_metadata_tables": 18,
+      "default_msms_identical": true,
+      "all_outputs_native_subsets": true,
+      "points_by_level": [
+        {
+          "0": 91220341,
+          "9": 23912990
+        },
+        {
+          "0": 7369644,
+          "9": 23912990
+        },
+        {
+          "0": 7369644,
+          "9": 7746446
+        }
+      ],
+      "native_summed_intensity_by_level": [
+        {
+          "0": 10055543567,
+          "9": 2799579429
+        },
+        {
+          "0": 1893127973,
+          "9": 2799579429
+        },
+        {
+          "0": 1893127973,
+          "9": 1159696711
+        }
+      ],
+      "source_checksums": {
+        "analysis.tdf": "3641bdd56a2dcc7921cdb25b2afae057fe7773b8db83a2557810ce3c638e5531",
+        "analysis.tdf_bin": "cfd548d114d6ab4e23287be9d3b8fde6bbc4a3a6cc0015d821fbdd276c90b5e7"
+      },
+      "msms_intensity_retained_percent": 41.42396172035882,
+      "output_order": [
+        "input",
+        "default_ms1",
+        "msms_radius_1"
+      ],
+      "run_stats": {
+        "ms1": {
+          "active_gates": {
+            "dda_window": false,
+            "dia_ms1": true,
+            "dia_neighbors": false,
+            "dia_per_window": false,
+            "dia_scan_varying": false,
+            "dia_window": false,
+            "ms1_neighbors": false,
+            "ms1_polygon": false,
+            "prm_neighbors": false,
+            "prm_per_event": false
+          },
+          "cropped_frames": 0,
+          "dry_run": false,
+          "elapsed_seconds": 11.417753802,
+          "frames": 4452,
+          "input_binary_bytes": 317374464,
+          "kept_ms1_points": 7369644,
+          "kept_pct": 27.170788622453735,
+          "kept_points": 31282634,
+          "kept_summed_intensity": 4692370791,
+          "ms1_frames": 405,
+          "ms1_kept_pct": 8.078948093386321,
+          "msms_frames": 4047,
+          "multiple_calibrations": false,
+          "output_binary_bytes": 103824790,
+          "processed_frames": 4452,
+          "raw_ms1_points": 91220341,
+          "raw_points": 115133331,
+          "raw_summed_intensity": 12854659090,
+          "worker_threads": 4
+        },
+        "neighbors": {
+          "active_gates": {
+            "dda_window": false,
+            "dia_ms1": true,
+            "dia_neighbors": true,
+            "dia_per_window": true,
+            "dia_scan_varying": true,
+            "dia_window": true,
+            "ms1_neighbors": false,
+            "ms1_polygon": false,
+            "prm_neighbors": false,
+            "prm_per_event": false
+          },
+          "cropped_frames": 0,
+          "dry_run": false,
+          "elapsed_seconds": 18.532316099,
+          "frames": 4452,
+          "input_binary_bytes": 317374464,
+          "kept_ms1_points": 7369644,
+          "kept_pct": 13.129204087737198,
+          "kept_points": 15116090,
+          "kept_summed_intensity": 3052489456,
+          "ms1_frames": 405,
+          "ms1_kept_pct": 8.078948093386321,
+          "msms_frames": 4047,
+          "multiple_calibrations": false,
+          "output_binary_bytes": 46678869,
+          "processed_frames": 4452,
+          "raw_ms1_points": 91220341,
+          "raw_points": 115133331,
+          "raw_summed_intensity": 12854659090,
+          "worker_threads": 4
+        }
+      }
+    },
+    {
+      "kind": "slice",
+      "source": "acquisitions/Dil_1_1_1FSLICE_DIA_5min_PepSep_4cm_Slot2-19_1_4249.d",
+      "sdk_sha256": "a97086132c64bed75496f7da02aa43a741a8dba4b1dc031e194cd9c51a6f3e9d",
+      "frames_per_file": 4455,
+      "unchanged_metadata_tables": 18,
+      "default_msms_identical": true,
+      "all_outputs_native_subsets": true,
+      "points_by_level": [
+        {
+          "0": 192169054,
+          "9": 392833100
+        },
+        {
+          "0": 9318959,
+          "9": 392833100
+        },
+        {
+          "0": 9318959,
+          "9": 195301363
+        }
+      ],
+      "native_summed_intensity_by_level": [
+        {
+          "0": 19906505920,
+          "9": 38527460846
+        },
+        {
+          "0": 2182702080,
+          "9": 38527460846
+        },
+        {
+          "0": 2182702080,
+          "9": 19820379887
+        }
+      ],
+      "source_checksums": {
+        "analysis.tdf": "f91419bfefaa2a81da9f3a0ac2851209ef188c48438972512d6e9c0949897129",
+        "analysis.tdf_bin": "f5e17b6570a525cf9812c44f69abe8189aaab9651930920a033cd5ed61999fa9"
+      },
+      "msms_intensity_retained_percent": 51.44481222426002,
+      "output_order": [
+        "input",
+        "default_ms1",
+        "msms_radius_1"
+      ],
+      "run_stats": {
+        "ms1": {
+          "active_gates": {
+            "dda_window": false,
+            "dia_ms1": true,
+            "dia_neighbors": false,
+            "dia_per_window": false,
+            "dia_scan_varying": false,
+            "dia_window": false,
+            "ms1_neighbors": false,
+            "ms1_polygon": false,
+            "prm_neighbors": false,
+            "prm_per_event": false
+          },
+          "cropped_frames": 0,
+          "dry_run": false,
+          "elapsed_seconds": 187.61314521,
+          "frames": 4455,
+          "input_binary_bytes": 1536905216,
+          "kept_ms1_points": 9318959,
+          "kept_pct": 68.743688591615,
+          "kept_points": 402152059,
+          "kept_summed_intensity": 40709467955,
+          "ms1_frames": 743,
+          "ms1_kept_pct": 4.849354672891297,
+          "msms_frames": 3712,
+          "multiple_calibrations": false,
+          "output_binary_bytes": 1068644699,
+          "processed_frames": 4455,
+          "raw_ms1_points": 192169054,
+          "raw_points": 585002154,
+          "raw_summed_intensity": 58432933028,
+          "worker_threads": 4
+        },
+        "neighbors": {
+          "active_gates": {
+            "dda_window": false,
+            "dia_ms1": true,
+            "dia_neighbors": true,
+            "dia_per_window": true,
+            "dia_scan_varying": false,
+            "dia_window": true,
+            "ms1_neighbors": false,
+            "ms1_polygon": false,
+            "prm_neighbors": false,
+            "prm_per_event": false
+          },
+          "cropped_frames": 0,
+          "dry_run": false,
+          "elapsed_seconds": 268.961244416,
+          "frames": 4455,
+          "input_binary_bytes": 1536905216,
+          "kept_ms1_points": 9318959,
+          "kept_pct": 34.97770403081285,
+          "kept_points": 204620322,
+          "kept_summed_intensity": 22002441019,
+          "ms1_frames": 743,
+          "ms1_kept_pct": 4.849354672891297,
+          "msms_frames": 3712,
+          "multiple_calibrations": false,
+          "output_binary_bytes": 531962665,
+          "processed_frames": 4455,
+          "raw_ms1_points": 192169054,
+          "raw_points": 585002154,
+          "raw_summed_intensity": 58432933028,
+          "worker_threads": 4
+        }
+      }
+    }
+  ]
+}

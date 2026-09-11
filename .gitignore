@@ -20,3 +20,6 @@ venv/
 # perf profiling output
 perf.data
 perf.data.old
+
+# Downloaded acquisition examples and outputs (manifest/docs tracked separately)
+/test-data/acquisitions/

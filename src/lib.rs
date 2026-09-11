@@ -44,6 +44,7 @@ pub mod filter;
 pub mod frame;
 pub mod halo;
 pub mod msms;
+mod neighbor;
 pub mod params;
 pub mod polygon;
 pub mod smooth;
@@ -51,18 +52,24 @@ pub mod watershed;
 pub mod writer;
 
 // SQLite plumbing for the high-level pipeline; not part of the public API.
+#[cfg(feature = "config")]
+pub mod batch;
+pub mod output;
+pub mod provenance;
 mod tdf;
+pub mod validation;
 
 // High-level pipeline.
 pub use error::{DecodeError, DnoiseError, Result};
 pub use params::{
     BoxCentroidParams, CropParams, DdaWindowParams, DiaMs1WindowParams, DiaWindowParams,
-    FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, SmoothParams, Stages,
-    WatershedParams,
+    FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, NeighborParams, SmoothParams,
+    Stages, WatershedParams,
 };
 pub use writer::{
     Calibration, DecodedFrame, DenoiseStats, FrameCtx, Progress, RunContext, RunOptions,
-    SampleSpec, denoise, denoise_with_options, denoise_with_progress, process_frame_decoded,
+    SampleSpec, denoise, denoise_in_place, denoise_with_options, denoise_with_progress,
+    process_frame_decoded,
 };
 
 // Low-level building blocks.
@@ -72,7 +79,7 @@ use std::path::Path;
 use timsrust::converters::ConvertableDomain;
 use timsrust::readers::MetadataReader;
 
-/// Acquisition scheme of a `.d` run, detected from the `Frames.MsMsType` column.
+/// Acquisition scheme of a `.d` run, detected from frame types and checked PRM events.
 /// Drives the `--preset auto` gate selection (see the CLI): ddaPASEF wants the MS1
 /// selection-polygon gate, diaPASEF the isolation-window gates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,26 +88,36 @@ pub enum Acquisition {
     DdaPasef,
     /// diaPASEF (`MsMsType` 9 present): data-independent PASEF.
     DiaPasef,
+    /// prm-PASEF (`MsMsType` 10) with checked target/event metadata.
+    PrmPasef,
+    /// More than one nonzero frame type. Acquisition gates are disabled.
+    Mixed,
     /// Only MS1 frames — no MS/MS in the run.
     Ms1Only,
     /// MS/MS frames present but of an unrecognised `MsMsType`.
     Unknown,
 }
 
-/// Detect the acquisition scheme of an input `.d` folder by inspecting the frame
-/// table (`MsMsType`): 9 anywhere = diaPASEF, else 8 = ddaPASEF, else MS1-only when
-/// every frame is MS1, else unknown. A cheap SQLite read, no frame decoding.
+impl std::fmt::Display for Acquisition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DdaPasef => "ddaPASEF",
+            Self::DiaPasef => "diaPASEF",
+            Self::PrmPasef => "prm-PASEF",
+            Self::Mixed => "mixed acquisition",
+            Self::Ms1Only => "MS1-only",
+            Self::Unknown => "unknown acquisition",
+        })
+    }
+}
+
+/// Detect the acquisition scheme without decoding frames. PRM event metadata is
+/// checked for valid frame/target references, isolation geometry and scan bounds.
+/// Empty PRM tables in other acquisition modes do not activate PRM handling.
 pub fn detect_acquisition(input: &Path) -> Result<Acquisition> {
-    let meta = tdf::read_frame_meta(&input.join("analysis.tdf"))?;
-    Ok(if meta.iter().any(|m| m.ms_ms_type == 9) {
-        Acquisition::DiaPasef
-    } else if meta.iter().any(|m| m.ms_ms_type == 8) {
-        Acquisition::DdaPasef
-    } else if meta.iter().all(|m| m.is_ms1()) {
-        Acquisition::Ms1Only
-    } else {
-        Acquisition::Unknown
-    })
+    let path = input.join("analysis.tdf");
+    let meta = tdf::read_frame_meta(&path)?;
+    tdf::detect_acquisition(&path, &meta)
 }
 
 /// Convert a mass tolerance in ppm to a TOF-index half-width for the vertical

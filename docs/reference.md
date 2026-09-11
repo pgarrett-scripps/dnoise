@@ -5,6 +5,13 @@ start see the [README](../README.md), for the algorithm itself see
 [ALGORITHM.md](../ALGORITHM.md), and for the library API see
 [docs.rs](https://docs.rs/dnoise).
 
+For prm-PASEF, the ordinary command preserves fragments; `--denoise-msms` enables
+experimental filtering within each PRM isolation event using the `--msms-*`
+parameters. Discovery gates remain disabled. PRM rejects `--all-frames`, while
+mixed/unknown acquisitions reject both fragment-filter options. Explicit cropping
+still applies to MS/MS. PRM metadata checks remain active with `--skip-validation`.
+See [targeted support](targeted.md).
+
 ## Command line
 
 ```bash
@@ -51,7 +58,10 @@ so binary offsets stay consistent.
 | `--smooth` | off | Final stage: box-average each survivor's intensity over its `(scan, TOF-index)` box (stabilises the watershed centroider). Sub: `--smooth-mz-idx-half-width`, `--smooth-scan-half-width`, `--smooth-iterations`. |
 | `--watershed` | off | Final stage: watershed centroiding, collapsing point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
 | `--box-centroid` | off | Final stage: greedy small-box centroiding, tiling streaks into small centroids rather than collapsing them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
-| `--frame-half-width` | 0 | **Experimental.** Pre-average each MS1 frame over its `2r+1` MS1-frame neighborhood before filtering (see below). |
+| `--ms1-neighbor-radius` | 0 | **Experimental.** Previous/next compatible MS1 observations for the keep decision. Alias: `--frame-half-width`. |
+| `--prm-neighbor-radius` | 0 | **Experimental.** Previous/next compatible observations of each PRM target; requires MS/MS denoising. |
+| `--dia-neighbor-radius` | 0 | **Experimental.** Previous/next compatible observations of each DIA isolation window; requires MS/MS filtering. |
+| `--neighbor-max-rt-gap` | 5 | Maximum absolute RT distance between a supporting observation and the current frame, in **seconds**. |
 | `--all-frames` | off | Also filter MS/MS frames (default: MS1 only). |
 | `--mz-ppm` | - | Set the vertical filter's m/z window from a mass tolerance in ppm (converted at a reference m/z) instead of raw TOF indices. Overrides `--mz-half-width` (see below). |
 | `--mz-ppm-ref` | acq midpoint | Reference m/z (Da) for `--mz-ppm`. |
@@ -65,6 +75,7 @@ so binary offsets stay consistent.
 | `--sample-seed` | 0 | Seed for `--sample` frame selection. |
 | `--report` | - | Write a JSON run report (effective config + reduction stats) to this file. |
 | `--threads` | all cores | Worker threads. |
+| `--frame-batch-size` | 2048 | Frames encoded per batch; smaller values may lower memory at a runtime cost. |
 | `--config` / `-c` | - | Load parameters from a TOML file (see below). |
 | `--force` | off | Overwrite an existing output folder. |
 | `--in-place` | off | Denoise the input folder in place (omit `OUTPUT`, see below). |
@@ -95,7 +106,9 @@ references it stay valid and Bruker-SDK compatible. The crop composes with the
 denoiser (applied as an extra filter), or run it alone with `--crop-only` to
 leave retained signal untouched. Note the crop does not rewrite the
 acquisition-range metadata (`MzAcqRange…`), which continues to describe what
-the instrument acquired.
+the instrument acquired. Physical bounds reject multiple calibration references
+in the dimension being cropped; RT/intensity-only crops remain available.
+See [calibration restrictions](provenance.md#calibration-restrictions).
 
 ## Dry runs & reports (`--dry-run`, `--sample`, `--report`)
 
@@ -117,17 +130,12 @@ acquired range) via the run calibration. The vertical filter still uses one
 constant index window, so this sets a physically meaningful width once rather
 than making the window vary across the mass range.
 
-## In-place denoising (`--in-place`)
+## In-place replacement
 
-Omit the `OUTPUT` argument and pass `--in-place` to overwrite the input
-folder. dnoise still never edits the source while reading it: it writes a
-temporary sibling folder (`<INPUT>.dnoise-tmp`) and, only after a clean run,
-moves the original aside to `<INPUT>.dnoise-old`, renames the new folder into
-place, and deletes the backup. If the final rename fails the original is
-restored, so an interrupted run leaves the input intact (plus a recoverable
-`.dnoise-tmp`/`.dnoise-old` sibling). The two renames are atomic only when the
-temp folder lands on the same filesystem as the input, which it does by
-construction.
+`dnoise input.d --in-place` processes and validates an owned temporary copy, then
+replaces the input. Existing output is preserved on processing errors or cancel.
+Installation failures restore the original or report its backup location.
+See [file safety and crash recovery](provenance.md#file-safety-and-recovery).
 
 ## MS/MS denoising (ddaPASEF, opt-in via `--denoise-msms`)
 
@@ -179,15 +187,22 @@ left/right neighbors do. It works in integer `(scan, TOF index)` space (no
 calibration) and keeps/drops native points (no smoothing). Disable with
 `--no-halo`.
 
-## `--frame-half-width` is experimental
+## Experimental neighbor support
 
-It replaces each MS1 frame with the centered running average of its `2r+1`
-MS1-frame neighborhood before filtering. With the default zero intensity
-thresholds the exact-`(scan, tof)` merge mostly *concatenates* adjacent frames
-(they share only ~4% of bins) and inflates the output rather than denoising
-it. It only suppresses noise when `--min-window-intensity` is raised above the
-single-frame noise floor. Leave it at `0` unless you are deliberately
-experimenting.
+`--ms1-neighbor-radius`, `--prm-neighbor-radius`, and `--dia-neighbor-radius`
+control temporal evidence independently. A radius of 1 uses up to one preceding
+and one following **compatible observation**, plus the current observation.
+`--neighbor-max-rt-gap` limits each neighbor's distance to the current frame
+(default 5 seconds). No output points or intensities are imported from neighbors.
+
+The legacy `--frame-half-width` CLI flag and `frame_half_width` TOML key remain
+accepted for MS1. New recipes export `ms1_neighbor_radius`; conflicting TOML values
+are rejected. Earlier running-average documentation described obsolete behavior:
+the current pipeline sums for a keep mask and preserves native output intensities.
+
+PRM/DIA event boundaries, geometry, acquisition settings, and calibration limits
+are enforced. Larger radii change intensity-threshold and halo behavior; accuracy
+and peak-boundary effects need downstream validation. See [full semantics](neighbors.md).
 
 ## Config file
 
@@ -259,3 +274,51 @@ cargo run --release --example check_codec -- <PATH.d> [num_frames]
 
 dnoise reads **compression type 2** input and always writes
 type 2.
+
+## Processing records and batch commands
+
+Every successful output carries its own [processing history and reusable recipe](provenance.md).
+Use `dnoise metadata output.d` to inspect history and `dnoise validate output.d`
+to check SQLite metadata and every type-2 frame. An independent SDK check is
+available with `python examples/validate_sdk.py --sdk /path/to/libtimsdata.so output.d`.
+For unattended processing, see [batch manifests](batch.md).
+
+Full validation uses up to four decoder tasks in the current Rayon pool, with
+bounded batches read in physical file order. Normal runs use the pool selected
+by `--threads`; `dnoise validate` uses Rayon's default pool (configurable with
+`RAYON_NUM_THREADS`). Validation concurrency is capped at four to limit memory.
+See [validation performance](validation-performance.md) for measured tradeoffs.
+
+### Optional full validation
+
+Full input/output decoding checks are **enabled by default**. To skip these
+additional passes, use:
+
+```sh
+dnoise input.d output.d --skip-validation
+dnoise batch jobs.json --skip-validation
+```
+
+Set `skip_validation = true` in TOML or a batch job's `config` for the same
+behavior. `--validate` restores full validation and overrides configuration;
+the two CLI flags cannot be combined. Batch flags override each job's setting.
+The GUI has a **Full input/output validation** checkbox in advanced settings.
+
+Skipping full validation still checks SQLite integrity, frame headers, offsets,
+overlaps, parameters, and input/output paths. Processing still decodes the frames
+it needs and uses checked encoding. Outputs are staged and structurally checked
+before installation. Separate payload/count verification is skipped on both
+input and output, including with `--in-place`; some corruption can go undetected.
+Dry runs skip only the additional input decoding pass because they write no output.
+
+Reports and processing history record `validation` as `full` or `structural`, and
+saved recipes retain the setting. Older history without this field has no explicit
+validation-mode record. `dnoise validate folder.d` always runs the full check,
+regardless of any recipe stored in that folder.
+
+## Synchro-, midia- and Slice-PASEF
+
+These type-2 DIA-family acquisitions use the existing DIA options, including
+`--denoise-msms` and `--dia-neighbor-radius`. Continuous one-scan window steps are
+handled as scanning regions; static Slice/DIA windows stay separate. Neighbor
+matching compares full trajectories. See [examples and limitations](acquisition-examples.md).

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "retrieved_on": "2026-09-09",
+  "examples": [
+    {
+      "method": "synchro-PASEF",
+      "project": "PXD037766",
+      "source_url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2023/03/PXD037766/20220923_TIMS03_PaSk_SA_4prot_200fmol_Evo05_3min_IM0713_classical_SyS_4MS_wCE_S4-G3_1_32594.d.zip",
+      "directory": "acquisitions/20220923_TIMS03_PaSk_SA_4prot_200fmol_Evo05_3min_IM0713_classical_SyS_4MS_wCE_S4-G3_1_32594.d",
+      "archive_member_prefix": null,
+      "extraction": "complete ZIP",
+      "files": {
+        "analysis.tdf": {
+          "bytes": 6139904,
+          "sha256": "06d0ec5eb1d9520a2aaf8368334a454ae002ef24040aee01f14f9977f907b269"
+        },
+        "analysis.tdf_bin": {
+          "bytes": 45834240,
+          "sha256": "9fa713602070942c57166f86ba80d1696c30cd7cbfc2e62b32aa13ca350970d1"
+        }
+      },
+      "compression_type": 2,
+      "frames_by_msms_type": {
+        "0": 341,
+        "9": 1363
+      },
+      "archive_sha256": "85686b38dd7da8c549ed0ec78bb6a01970d4eec9e01718fd8984c9f0284665fa"
+    },
+    {
+      "method": "midia-PASEF",
+      "project": "PXD073779",
+      "source_url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2026/07/PXD073779/midia.rar",
+      "directory": "acquisitions/NSCtrl_3_midiaPASEF_25x10_OL5_5min_PepSep_4cm_Slot2-33_3_4418.d",
+      "archive_member_prefix": "NSCtrl_3_midiaPASEF_25x10_OL5_5min_PepSep_4cm_Slot2-33_3_4418.d/",
+      "extraction": "first complete .d directory, streamed archive prefix",
+      "files": {
+        "analysis.tdf": {
+          "bytes": 23961600,
+          "sha256": "3641bdd56a2dcc7921cdb25b2afae057fe7773b8db83a2557810ce3c638e5531"
+        },
+        "analysis.tdf_bin": {
+          "bytes": 317374464,
+          "sha256": "cfd548d114d6ab4e23287be9d3b8fde6bbc4a3a6cc0015d821fbdd276c90b5e7"
+        }
+      },
+      "compression_type": 2,
+      "frames_by_msms_type": {
+        "0": 405,
+        "9": 4047
+      },
+      "archive_prefix_bytes_consumed": 320864256
+    },
+    {
+      "method": "Slice-PASEF",
+      "project": "PXD073779",
+      "source_url": "https://ftp.pride.ebi.ac.uk/pride/data/archive/2026/07/PXD073779/Slice.tar.gz",
+      "directory": "acquisitions/Dil_1_1_1FSLICE_DIA_5min_PepSep_4cm_Slot2-19_1_4249.d",
+      "archive_member_prefix": "Dil_1_1_1FSLICE_DIA_5min_PepSep_4cm_Slot2-19_1_4249.d/",
+      "extraction": "first complete .d directory, streamed archive prefix",
+      "files": {
+        "analysis.tdf": {
+          "bytes": 21868544,
+          "sha256": "f91419bfefaa2a81da9f3a0ac2851209ef188c48438972512d6e9c0949897129"
+        },
+        "analysis.tdf_bin": {
+          "bytes": 1536905216,
+          "sha256": "f5e17b6570a525cf9812c44f69abe8189aaab9651930920a033cd5ed61999fa9"
+        }
+      },
+      "compression_type": 2,
+      "frames_by_msms_type": {
+        "0": 743,
+        "9": 3712
+      },
+      "archive_prefix_bytes_consumed": 2443182080
+    }
+  ]
+}

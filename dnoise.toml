@@ -30,9 +30,9 @@ halo_mz_idx_half_width = 80
 # Reference-box half-width along ion-mobility scan.
 halo_scan_half_width = 2
 
-# --- MS/MS denoising (ddaPASEF only, off by default) ---
-# Combine each precursor's fragment scans across frames, filter the combined
-# spectrum (streak + halo), and prune the individual scans. Changes MS/MS
+# --- MS/MS denoising (DDA/DIA/PRM, off by default) ---
+# DDA combines by precursor; DIA/PRM filter isolation events by default.
+# Optional neighbors support DIA/PRM decisions across nearby observations. Changes MS/MS
 # spectra (and identifications). Enable with denoise_msms = true (or --denoise-msms).
 denoise_msms = false
 msms_mz_half_width = 3
@@ -136,10 +136,14 @@ ms1_polygon_mz_pad = 5.0
 # Default matches dia_ms1_im_pad.
 ms1_polygon_im_pad = 0.05
 
-# --- Experimental pre-filter smoothing ---
-# Replace each MS1 frame with the centered running average of its 2r+1
-# MS1-frame neighborhood before filtering. 0 = off.
-frame_half_width = 0
+# --- Experimental neighbor support (sum for filtering, preserve native output) ---
+# Previous/next compatible observations per side; all radii default to 0 (off).
+# MS1 also accepts the legacy frame_half_width key (do not set conflicting values).
+ms1_neighbor_radius = 0
+prm_neighbor_radius = 0
+dia_neighbor_radius = 0
+# Maximum absolute RT distance from current frame, in SECONDS (not crop minutes).
+neighbor_max_rt_gap = 5.0
 
 # --- Region-of-interest crop (all optional, unset = no crop) ---
 # A blunt subset of the raw acquisition applied to EVERY frame (MS1 and MS/MS),
@@ -167,6 +171,9 @@ crop_only = false
 # mz_ppm_ref = 800.0   # default: midpoint of the acquired m/z range
 
 # --- Operational ---
+# Full input/output decoding checks are on by default. Set true to skip the
+# extra passes while retaining structural and file-safety checks.
+# skip_validation = false
 # Also filter MS/MS frames (default: MS1 only).
 all_frames = false
 # Worker threads. Omit (leave commented) to use all cores.

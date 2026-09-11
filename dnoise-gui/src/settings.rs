@@ -96,6 +96,7 @@ pub enum OutputMode {
 /// filter, halo, gate, crop, and ppm knobs (shown in the collapsible panel).
 #[derive(Clone)]
 pub struct Settings {
+    pub loaded_config: Config,
     // --- Main view ---
     pub preset: PresetChoice,
     pub output_mode: OutputMode,
@@ -145,6 +146,7 @@ impl Default for Settings {
         let fp = FilterParams::default();
         let hp = HaloParams::default();
         Self {
+            loaded_config: Config::default(),
             preset: PresetChoice::Auto,
             output_mode: OutputMode::Suffix,
             output_dir: String::new(),
@@ -202,8 +204,43 @@ fn parse_opt<T: std::str::FromStr>(s: &str, name: &str, log: &mut dyn FnMut(Stri
 }
 
 impl Settings {
+    /// Validate visible inputs and preserve all loaded CLI settings.
+    pub fn checked_config(&self) -> Result<Config, String> {
+        let mut errors = Vec::new();
+        let crop = self.crop_params(&mut |message| errors.push(message));
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
+        }
+        if self.use_ppm && (!self.mz_ppm.is_finite() || self.mz_ppm <= 0.0) {
+            return Err("ppm must be finite and positive".into());
+        }
+        let config = self.to_config();
+        dnoise::validation::parameters(
+            &FilterParams::default(),
+            &dnoise::Stages::default(),
+            &dnoise::RunOptions {
+                crop: Some(&crop),
+                crop_only: self.crop_only,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(config)
+    }
+    pub fn config_for(&self, input: &Path) -> Result<Config, String> {
+        let mut config = self.checked_config()?;
+        if self.follow_preset_gates && self.preset != PresetChoice::Auto {
+            let gates = resolve_gates(self.preset, input);
+            config.ms1_polygon = Some(gates.ms1_polygon);
+            config.dia_ms1_window = Some(gates.dia_ms1);
+            config.dia_window = Some(gates.dia_window);
+        }
+        Ok(config)
+    }
+
     /// The vertical-filter parameters, applying the ppm override when enabled
     /// (which needs the run calibration, hence `input`).
+    #[cfg(test)]
     pub fn filter_params(&self, input: &Path, log: &mut dyn FnMut(String)) -> FilterParams {
         let mut p = FilterParams {
             mz_half_width: self.mz_half_width,
@@ -225,17 +262,9 @@ impl Settings {
         p
     }
 
-    /// The halo parameters, or `None` when the halo filter is disabled.
-    pub fn halo_params(&self) -> Option<HaloParams> {
-        self.halo.then_some(HaloParams {
-            peak_fraction: self.halo_peak_fraction,
-            mz_idx_half_width: self.halo_mz_idx_half_width,
-            scan_half_width: self.halo_scan_half_width,
-        })
-    }
-
     /// Which MS1 gates to enable: from the preset (default) or the explicit
     /// override toggles.
+    #[cfg(test)]
     pub fn gates(&self, input: &Path) -> Gates {
         if self.follow_preset_gates {
             resolve_gates(self.preset, input)
@@ -265,7 +294,8 @@ impl Settings {
     /// Project the advanced knobs to a CLI-compatible [`Config`] for saving. Output
     /// location and preset are UI-session state, not part of the saved recipe.
     pub fn to_config(&self) -> Config {
-        let mut c = Config::default();
+        let mut c = self.loaded_config.clone();
+        c.mz_ppm = None;
         if self.use_ppm {
             c.mz_ppm = Some(self.mz_ppm);
         } else {
@@ -297,9 +327,7 @@ impl Settings {
         c.rt_max = crop.rt_max;
         c.min_intensity = crop.min_intensity;
         c.max_intensity = crop.max_intensity;
-        if self.crop_only {
-            c.crop_only = Some(true);
-        }
+        c.crop_only = Some(self.crop_only);
         c
     }
 
@@ -307,6 +335,7 @@ impl Settings {
     /// absent keys leave the field unchanged (crop fields, being authoritative, are
     /// cleared when the key is absent).
     pub fn apply_config(&mut self, c: &Config) {
+        self.loaded_config = c.clone();
         if let Some(v) = c.mz_ppm {
             self.use_ppm = true;
             self.mz_ppm = v;
@@ -475,6 +504,7 @@ mod tests {
     #[test]
     fn settings_round_trip_through_config() {
         let mut s = Settings::default();
+        s.loaded_config.skip_validation = Some(true);
         s.min_feature_length = 8;
         s.use_ppm = true;
         s.mz_ppm = 15.0;
@@ -494,6 +524,7 @@ mod tests {
         assert!(!s2.follow_preset_gates);
         assert!(s2.ms1_polygon);
         assert!(s2.crop_only);
+        assert_eq!(s2.checked_config().unwrap().skip_validation, Some(true));
     }
 
     #[test]

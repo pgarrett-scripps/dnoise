@@ -7,7 +7,14 @@ rather not touch the command line. It links the `dnoise` **library** directly
 Built with [`egui`/`eframe`](https://github.com/emilk/egui) — one self-contained
 native binary per OS, no web runtime.
 
+The queue identifies prm-PASEF acquisitions automatically. PRM preserves fragments
+by default; “Also denoise MS/MS” enables experimental filtering within each
+isolation event. Target/event metadata is checked before a run enters the queue. See
+[targeted support](../docs/targeted.md) for behavior and validation limits.
+
 ## Run / build
+
+Building the GUI requires Rust **1.95+** (the CLI/library minimum remains 1.85).
 
 ```bash
 cargo run -p dnoise-gui              # from the workspace root
@@ -16,13 +23,16 @@ cargo build -p dnoise-gui --release # release binary at target/release/dnoise-gu
 
 ## What it does
 
-- **Input:** drag `.d` folders onto the window, or paste a path and click *Add*.
+- **Input:** use *Browse…*, drag `.d` folders onto the window, or paste a path.
   Each folder's acquisition scheme (ddaPASEF / diaPASEF / MS1-only) is detected and
   shown in the list.
 - **Preset:** pick *Auto-detect* (chooses the right MS1 gate per file), *ddaPASEF*,
   *diaPASEF*, or *None*.
 - **Output:** write next to each input with a suffix (`_dnoise`) or into one chosen
   folder; optional overwrite and per-output JSON report.
+- **Validation:** enabled by default; uncheck *Full input/output validation* in
+  advanced settings to skip extra decoding passes. Structural checks remain, and
+  the selected mode is recorded inside the output.
 - **Advanced settings** (collapsible): every filter, halo, gate, crop, and ppm knob,
   defaulting to the tuned CLI defaults — leave it closed for a standard run, open it
   to tune aggressiveness, add a region-of-interest crop, switch the m/z window to a
@@ -32,7 +42,12 @@ cargo build -p dnoise-gui --release # release binary at target/release/dnoise-gu
 - **Settings file:** Save/Load the advanced knobs as a `dnoise.toml` that the CLI
   reads too (same schema); or drag a `.toml` onto the window to load it.
 - **Run:** processes the queue on a worker thread with a per-file progress bar and a
-  log pane. *Cancel* stops the current file mid-way and removes its partial output.
+  log pane. *Cancel* discards only the current temporary output, preserving existing files.
+- **Recovery:** output collisions are checked before a batch starts; *Retry unfinished*
+  reruns unfinished queue items in the current session.
+- **Inspect:** after completion, compare before/after frames and removed intensity
+  using identical axes and color scales.
+- **Save batch…:** export the queue and per-file settings for `dnoise batch jobs.json`.
 
 Everything runs through the same `dnoise::denoise_with_options` path as the CLI.
 
@@ -44,9 +59,18 @@ Pre-built binaries for Linux, macOS, and Windows are attached to each tagged
 `dnoise-gui`. The binaries are currently **unsigned**, so first launch may need an
 OS "allow anyway" step (Windows SmartScreen / macOS Gatekeeper).
 
-## Roadmap (not yet implemented)
+## Processing records
 
-- **Native OS file pickers** (behind a platform-gated `rfd` dependency; drag-and-drop
-  and path entry cover input for now).
-- A before/after **frame preview** heatmap.
-- **Signed** installers: Windows `.exe`, macOS `.app`/dmg, Linux AppImage.
+Completed outputs include `dnoise.provenance.json` and `dnoise.config.toml` inside
+the `.d` folder. Loaded TOML settings use the same resolver as the CLI, including
+options beyond the visible controls. Invalid crop text blocks a run.
+See [provenance](../docs/provenance.md) and [batch workflows](../docs/batch.md).
+
+Signed installers remain future work. Native dialogs and platform-specific
+launch behavior still need testing on each release platform.
+
+Advanced settings include **Neighbor support (experimental)**: separate MS1, PRM
+target, and DIA window radii, plus the maximum RT distance in seconds. Radius 1
+uses the previous/next compatible observation for filtering decisions only.
+PRM/DIA require MS/MS denoising. Defaults are off; native output intensity does
+not establish quantitative accuracy. See [details](../docs/neighbors.md).

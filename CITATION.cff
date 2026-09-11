@@ -44,8 +44,8 @@ identifiers:
 repository-code: "https://github.com/pgarrett-scripps/dnoise"
 url: "https://github.com/pgarrett-scripps/dnoise"
 license: MIT
-version: 0.1.0
-date-released: "2026-08-14"
+version: 0.3.0
+date-released: "2026-09-11"
 keywords:
   - mass spectrometry
   - proteomics

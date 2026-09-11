@@ -2,7 +2,9 @@
 //! point set (after grouping by scan / sorting by TOF). This is the gate that the
 //! encoder matches the layout timsrust reads.
 
-use dnoise::codec::{decode_frame_type2, encode_empty_frame_type2, encode_frame_type2};
+use dnoise::codec::{
+    decode_frame_type2, encode_empty_frame_type2, encode_frame_type2, try_encode_frame_type2,
+};
 
 /// Group/sort points the way the codec canonicalizes them, for comparison.
 fn canonical(points: &[(u32, u32, u32)]) -> Vec<(u32, u32, u32)> {
@@ -44,10 +46,11 @@ fn roundtrip_empty_frame() {
 /// `encode_empty_frame_type2` is a DIFFERENT function from the one
 /// `roundtrip_empty_frame` above exercises, and until cargo-mutants pointed it
 /// out nothing called it: replacing its whole body with `vec![]`, `vec![0]` or
-/// `vec![1]` left the suite green. It is the function that writes every empty
-/// MS/MS frame in a denoised DDA file, and its output never round-trips through
-/// the reader (timsrust cannot zstd-decode an absent payload), so a round-trip
-/// test could not cover it anyway. Assert the exact bytes the format specifies.
+/// `vec![1]` left the suite green. It is no longer on the write path (see
+/// `empty_frames_are_written_the_long_way` below) -- it documents the shape a
+/// READER must tolerate, and its output cannot round-trip through timsrust,
+/// which zstd-decodes an absent payload and fails. Assert the exact bytes the
+/// format specifies.
 #[test]
 fn empty_frame_record_is_the_canonical_eight_bytes() {
     let record = encode_empty_frame_type2(512);
@@ -62,6 +65,43 @@ fn empty_frame_record_is_the_canonical_eight_bytes() {
         512,
         "scan count must survive verbatim"
     );
+}
+
+/// REGRESSION. An empty frame must be written the LONG way -- header plus a
+/// zstd payload encoding an all-zero scan table -- not as the header-only
+/// 8-byte record. timsrust slices everything after the header and zstd-decodes
+/// it unconditionally, so a payload-less frame errors with "Decompression
+/// fails", and one unreadable frame makes the entire `.d` unreadable to every
+/// downstream consumer. dnoise's own reader tolerates both shapes, which is
+/// exactly why this needs a test: nothing in this repo notices the difference.
+///
+/// MS/MS denoising empties frames routinely (354 of them across the 18-file
+/// dda_5min benchmark arm), so this is the common case, not an edge case.
+#[test]
+fn empty_frames_are_written_the_long_way() {
+    for num_scans in [1, 16, 512, 936] {
+        let record = try_encode_frame_type2(num_scans, &[]).expect("encode");
+        assert!(
+            record.len() > 8,
+            "num_scans={num_scans}: empty frame was written header-only, which \
+             timsrust cannot decode"
+        );
+        assert_eq!(
+            &record[8..12],
+            &[0x28, 0xb5, 0x2f, 0xfd],
+            "num_scans={num_scans}: payload must be a real zstd frame"
+        );
+        let (scans, pts) = decode_frame_type2(&record).expect("decode");
+        assert_eq!(scans, num_scans);
+        assert!(pts.is_empty());
+    }
+}
+
+/// The one shape with no long form: zero scans means there is no scan table to
+/// compress, so the header-only record is all there is.
+#[test]
+fn zero_scan_frame_is_header_only() {
+    assert_eq!(encode_frame_type2(0, &[]).len(), 8);
 }
 
 /// The byte-transpose splits each u32 across four planes, but every value in the
@@ -94,17 +134,9 @@ fn malformed_records_are_rejected() {
         "a record below the 8-byte header must be ShortRecord"
     );
 
-    // Exactly the header length passes BOTH header checks and then fails in
-    // zstd, because the canonical empty record has no payload to decompress.
-    // That is by design and is the whole reason encode_empty_frame_type2 exists
-    // as a separate function: these records are emitted, never round-tripped.
-    assert!(
-        matches!(
-            decode_frame_type2(&encode_empty_frame_type2(4)),
-            Err(DecodeError::Zstd(_))
-        ),
-        "an 8-byte record must clear the header checks and fail only on the \
-         absent zstd payload"
+    assert_eq!(
+        decode_frame_type2(&encode_empty_frame_type2(4)).unwrap(),
+        (4, vec![])
     );
 
     // Declares more bytes than the record actually holds.
@@ -149,4 +181,32 @@ fn record_length_matches_header() {
     );
     let scan_count = u32::from_le_bytes(record[4..8].try_into().unwrap());
     assert_eq!(scan_count, 300);
+}
+
+#[test]
+fn checked_encoder_rejects_bad_coordinates_and_handles_zero_scans() {
+    use dnoise::codec::try_encode_frame_type2;
+    assert!(try_encode_frame_type2(1, &[(1, 2, 3)]).is_err());
+    assert!(try_encode_frame_type2(1, &[(0, u32::MAX, 3)]).is_err());
+    assert_eq!(
+        decode_frame_type2(&try_encode_frame_type2(0, &[]).unwrap()).unwrap(),
+        (0, vec![])
+    );
+}
+
+#[test]
+fn corrupt_headers_and_random_payloads_never_panic() {
+    let mut seed = 42u64;
+    for size in 8usize..256 {
+        let mut bytes = vec![0; size];
+        for byte in &mut bytes {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *byte = (seed >> 32) as u8;
+        }
+        bytes[..4].copy_from_slice(&(size as u32).to_le_bytes());
+        let _ = decode_frame_type2(&bytes);
+    }
+    let mut frame = encode_frame_type2(3, &[(1, 20, 7)]);
+    frame[4..8].copy_from_slice(&2u32.to_le_bytes());
+    assert!(decode_frame_type2(&frame).is_err());
 }

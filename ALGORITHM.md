@@ -80,6 +80,15 @@ of 80, and a scan half-width of 2. `--no-halo` disables this stage.
 
 ## Acquisition-aware gates
 
+prm-PASEF, mixed, and unknown acquisitions use the MS1 streak/halo stages without
+discovery acquisition gates. PRM optionally supports experimental MS/MS filtering
+inside each recorded isolation event, without merging adjacent targets. Optional
+neighbor support combines compatible observations for the keep decision only. Halo, smoothing, and centroiding also remain within each event;
+out-of-event points are dropped only when PRM MS/MS filtering is enabled.
+Mixed/unknown acquisitions reject fragment denoising. PRM target and event tables
+are preserved and checked for consistent references and scan intervals.
+See [targeted support](docs/targeted.md) for the current validation scope.
+
 The gates use acquisition geometry already stored in `analysis.tdf`:
 
 - **ddaPASEF/PASEF MS1:** the padded IMS selection polygon removes survey
@@ -101,9 +110,12 @@ padding for both MS1 gate types is 5 Da in m/z and 0.05 1/K0 in mobility.
   parameters. ddaPASEF precursor scans are combined before filtering;
   diaPASEF windows are filtered independently by default. This changes searched
   spectra and must be validated by re-searching.
-- **Frame averaging:** `--frame-half-width` averages aligned MS1 coordinates
-  across neighboring MS1 frames before filtering. It is experimental and off by
-  default.
+- **Neighbor support:** `--ms1-neighbor-radius`, `--prm-neighbor-radius`, and
+  `--dia-neighbor-radius` sum aligned native `(scan, TOF)` bins across compatible
+  nearby observations. Streak and halo filtering produce a keep mask applied only
+  to the current frame's original points. Defaults are radius 0 and a 5-second RT
+  distance limit; PRM/DIA events remain separate, including postprocessing.
+  See [matching rules and limitations](docs/neighbors.md).
 - **Smoothing:** `--smooth` replaces survivor intensities with local box
   averages before centroiding. Coordinates do not move.
 - **Watershed centroiding:** `--watershed` grows intensity-ordered groups and
@@ -133,12 +145,20 @@ run.
 
 - Input decoding currently supports Bruker compression type 2, not type 3.
 - Acquisition gates assume the geometry stored in the run metadata is correct.
-- Gates expressed in physical units use the run-level calibration; files with
-  multiple calibration segments receive a warning because boundaries may be
-  slightly offset in other segments.
+- Physical gates/crops require one calibration reference in each dimension
+  they convert. Affected operations reject multiple references; raw-coordinate
+  filtering and RT/intensity-only crops remain available.
 - The published benchmark covers one instrument and two gradient lengths.
   Other instruments and sample types should be evaluated with `--dry-run` and
   downstream validation before routine use.
 
 Run `dnoise --help` or read [`docs/reference.md`](docs/reference.md) for every
 parameter, precedence rule, and operational safeguard.
+
+## Scanning and Slice DIA variants
+
+The DIA path accepts type-2 synchro-, midia- and Slice-PASEF files. Consecutive
+one-scan quadrupole steps can form continuous monotonic scanning regions, while
+static windows remain separate even when they touch. Neighbor support matches
+the full native trajectory. Original geometry metadata is preserved; see
+[matching rules and real-file validation](docs/acquisition-examples.md).

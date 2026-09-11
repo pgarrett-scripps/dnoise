@@ -19,6 +19,10 @@
 //! encoder via a round-trip test.
 
 use crate::error::DecodeError;
+use std::io::Read;
+
+/// Maximum decompressed frame size accepted by the checked decoder (256 MiB).
+pub const MAX_DECODE_BYTES: usize = 256 * 1024 * 1024;
 
 /// A decoded frame: scan count plus `(scan, tof, intensity)` points in scan/TOF order.
 pub type DecodedFrame = (usize, Vec<(u32, u32, u32)>);
@@ -30,7 +34,14 @@ const HEADER_BYTES: usize = 8;
 ///
 /// `points` are `(scan, tof, intensity)` triples in any order; they are grouped
 /// by scan and sorted by TOF ascending internally.
+///
+/// # Panics
+/// Legacy unchecked API: invalid scan indices or overflowing coordinates may panic.
+/// New callers should use [`try_encode_frame_type2`] to receive typed errors.
 pub fn encode_frame_type2(num_scans: usize, points: &[(u32, u32, u32)]) -> Vec<u8> {
+    if num_scans == 0 && points.is_empty() {
+        return encode_empty_frame_type2(0);
+    }
     let peak_count = points.len();
 
     // Group points by scan via counting sort into a single flat buffer, avoiding
@@ -98,12 +109,20 @@ pub fn encode_frame_type2(num_scans: usize, points: &[(u32, u32, u32)]) -> Vec<u
     record
 }
 
-/// Encode an empty (0-peak) frame exactly as Bruker stores it: an 8-byte record
+/// Encode an empty (0-peak) frame as the 8-byte record
 /// `[u32 total_byte_count = 8][u32 scan_count]` with no compressed payload.
 ///
-/// timsTOF DDA files contain empty MS/MS frames; timsrust errors trying to
-/// zstd-decode their absent payload, so we never round-trip these through the
-/// reader — we emit the canonical empty record directly.
+/// NOT USED ON THE WRITE PATH, deliberately. This is the shape a reader must
+/// tolerate, not the shape we emit. timsrust zstd-decodes whatever follows the
+/// header unconditionally, so it fails on a record with no payload -- and one
+/// unreadable frame makes the whole `.d` unreadable to everything downstream
+/// (Sage and the paper analysis both read through timsrust). Writing an empty
+/// frame the long way costs 24 bytes and stays readable, so
+/// `encode_frame_type2(num_scans, &[])` is what the writer uses; see
+/// [`encode_empty_frame_type2`]'s callers, which are decode-side only.
+///
+/// `num_scans == 0` is the one case with no long form: there is no scan table
+/// to compress, so [`encode_frame_type2`] delegates here.
 pub fn encode_empty_frame_type2(num_scans: usize) -> Vec<u8> {
     let mut record = Vec::with_capacity(HEADER_BYTES);
     record.extend_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
@@ -122,44 +141,90 @@ pub fn decode_frame_type2(record: &[u8]) -> Result<DecodedFrame, DecodeError> {
     if total_byte_count > record.len() || total_byte_count < HEADER_BYTES {
         return Err(DecodeError::InvalidByteCount(total_byte_count));
     }
+    let header_scans = u32::from_le_bytes(record[4..8].try_into().unwrap()) as usize;
+    if total_byte_count == HEADER_BYTES {
+        return Ok((header_scans, Vec::new()));
+    }
     let payload = &record[HEADER_BYTES..total_byte_count];
-    let bytes = zstd::decode_all(payload).map_err(DecodeError::Zstd)?;
+    let reader = zstd::stream::read::Decoder::new(payload).map_err(DecodeError::Zstd)?;
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_DECODE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(DecodeError::Zstd)?;
+    let invalid = || DecodeError::InvalidLayout;
+    if bytes.len() > MAX_DECODE_BYTES {
+        return Err(DecodeError::SizeLimit);
+    }
     if bytes.len() % 4 != 0 {
         return Err(DecodeError::Misaligned);
     }
     let n = bytes.len() / 4;
+    if n == 0 {
+        return Err(invalid());
+    }
     let get = |i: usize| -> u32 {
         bytes[i] as u32
             | (bytes[i + n] as u32) << 8
             | (bytes[i + 2 * n] as u32) << 16
             | (bytes[i + 3 * n] as u32) << 24
     };
-
     let scan_count = get(0) as usize;
     if scan_count > n {
         return Err(DecodeError::ScanCountOverflow { scan_count, len: n });
     }
-    let peak_count = (n - scan_count) / 2;
-
-    let mut scan_offsets = Vec::with_capacity(scan_count + 1);
-    scan_offsets.push(0usize);
-    for scan_index in 0..scan_count.saturating_sub(1) {
-        let size = (get(scan_index + 1) / 2) as usize;
-        scan_offsets.push(scan_offsets[scan_index] + size);
+    if scan_count == 0 || scan_count != header_scans || (n - scan_count) % 2 != 0 {
+        return Err(invalid());
     }
-    scan_offsets.push(peak_count);
-
+    let peak_count = (n - scan_count) / 2;
+    let mut offsets = vec![0usize];
+    for scan in 0..scan_count - 1 {
+        let size = get(scan + 1);
+        if size % 2 != 0 {
+            return Err(invalid());
+        }
+        let end = offsets[scan]
+            .checked_add(size as usize / 2)
+            .ok_or_else(invalid)?;
+        if end > peak_count {
+            return Err(invalid());
+        }
+        offsets.push(end);
+    }
+    offsets.push(peak_count);
     let mut points = Vec::with_capacity(peak_count);
-    for scan_index in 0..scan_count {
-        let start = scan_offsets[scan_index];
-        let end = scan_offsets[scan_index + 1];
-        let mut current_sum: u32 = 0;
-        for peak_index in start..end {
-            current_sum += get(scan_count + 2 * peak_index);
-            let tof = current_sum - 1;
-            let intensity = get(scan_count + 1 + 2 * peak_index);
-            points.push((scan_index as u32, tof, intensity));
+    for scan in 0..scan_count {
+        let mut sum = 0u32;
+        for peak in offsets[scan]..offsets[scan + 1] {
+            sum = sum
+                .checked_add(get(scan_count + 2 * peak))
+                .ok_or_else(invalid)?;
+            let tof = sum.checked_sub(1).ok_or_else(invalid)?;
+            points.push((scan as u32, tof, get(scan_count + 2 * peak + 1)));
         }
     }
     Ok((scan_count, points))
+}
+
+/// Checked encoder for public callers. Rejects invalid coordinates and size overflow.
+pub fn try_encode_frame_type2(
+    num_scans: usize,
+    points: &[(u32, u32, u32)],
+) -> Result<Vec<u8>, DecodeError> {
+    let size = points
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(num_scans))
+        .and_then(|n| n.checked_mul(4))
+        .ok_or(DecodeError::SizeLimit)?;
+    if num_scans > u32::MAX as usize || size > MAX_DECODE_BYTES {
+        return Err(DecodeError::SizeLimit);
+    }
+    if points
+        .iter()
+        .any(|&(scan, tof, _)| scan as usize >= num_scans || tof == u32::MAX)
+    {
+        return Err(DecodeError::InvalidLayout);
+    }
+    Ok(encode_frame_type2(num_scans, points))
 }

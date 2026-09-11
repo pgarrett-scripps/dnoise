@@ -1,21 +1,24 @@
 //! dnoise CLI.
 
+mod commands;
+
 use anyhow::{Context, Result};
 use clap::Parser;
-use dnoise::{
-    BoxCentroidParams, CropParams, DdaWindowParams, DiaMs1WindowParams, DiaWindowParams,
-    FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, RunOptions, SampleSpec,
-    SmoothParams, Stages, WatershedParams,
-};
+use dnoise::{RunOptions, SampleSpec};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Denoise a Bruker timsTOF .d folder via the iterative vertical-IM feature filter.
 #[derive(Parser)]
-#[command(name = "dnoise", version, about)]
+#[command(
+    name = "dnoise",
+    version,
+    about,
+    after_help = "Commands: dnoise validate INPUT.d | dnoise metadata INPUT.d | dnoise batch MANIFEST.json"
+)]
 struct Cli {
     /// Input Bruker .d folder.
     input: PathBuf,
@@ -46,10 +49,22 @@ struct Cli {
     #[arg(long)]
     iterations: Option<usize>,
 
-    /// Pre-filter smoothing: replace each MS1 frame with the centered running
-    /// average of its `2r+1` MS1-frame neighborhood before filtering (0 = off).
-    #[arg(long)]
+    /// MS1 support: previous/next compatible MS1 observations for the filtering
+    /// decision only; native output intensities are preserved (0 = off).
+    #[arg(long = "ms1-neighbor-radius", visible_alias = "frame-half-width")]
     frame_half_width: Option<usize>,
+    /// PRM support: previous/next matching target observations (0 = off).
+    /// Requires --denoise-msms on PRM runs; ignored on other acquisition types.
+    #[arg(long)]
+    prm_neighbor_radius: Option<usize>,
+    /// DIA support: previous/next matching isolation-window observations (0 = off).
+    /// Requires --denoise-msms or --all-frames on DIA runs; forces event boundaries.
+    #[arg(long)]
+    dia_neighbor_radius: Option<usize>,
+    /// Maximum distance from the current frame to a supporting neighbor, seconds
+    /// (default 5). Applies to MS1, PRM and DIA; must be finite and positive.
+    #[arg(long)]
+    neighbor_max_rt_gap: Option<f64>,
 
     /// Disable the horizontal-halo filter (on by default), which removes the weak
     /// m/z halo flanking bright ions (left/right) after the vertical filter.
@@ -65,9 +80,9 @@ struct Cli {
     #[arg(long)]
     halo_scan_half_width: Option<usize>,
 
-    /// Denoise ddaPASEF MS/MS frames precursor-by-precursor (off by default):
-    /// combine each precursor's fragment scans across frames, filter the combined
-    /// spectrum, and prune the individual scans. Changes MS/MS spectra (and IDs).
+    /// Denoise MS/MS (off by default): DDA precursor pooling, DIA window filtering,
+    /// or experimental PRM filtering within each isolation event. Changes spectra
+    /// and quantitative results. Unsupported for mixed or unknown acquisitions.
     #[arg(long)]
     denoise_msms: bool,
     /// MS/MS filter: column half-width in TOF indices.
@@ -284,11 +299,20 @@ struct Cli {
     /// Worker threads (default: all cores).
     #[arg(long)]
     threads: Option<usize>,
+    /// Maximum frames per processing batch (default 2048); smaller uses less memory.
+    #[arg(long)]
+    frame_batch_size: Option<usize>,
+    /// Skip full input/output decoding checks; structural and file-safety checks remain.
+    #[arg(long, alias = "no-validation", conflicts_with = "validate")]
+    skip_validation: bool,
+    /// Enable full validation (default), overriding skip_validation in the config.
+    #[arg(long, conflicts_with = "skip_validation")]
+    validate: bool,
     /// Overwrite the output folder if it already exists.
     #[arg(long)]
     force: bool,
     /// Denoise the input folder in place: write to a temporary sibling folder and,
-    /// on success, atomically replace the input with it. Omit the OUTPUT argument.
+    /// on success, replace the input with recovery on installation failure. Omit the OUTPUT argument.
     #[arg(long, conflicts_with = "output")]
     in_place: bool,
 
@@ -332,311 +356,224 @@ fn init_logging(verbose: u8, quiet: bool) {
         .init();
 }
 
-/// Build a sibling path by appending `suffix` to `path`'s full name (so an
-/// `input.d` folder yields e.g. `input.d.dnoise-tmp`).
-fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
-/// On-disk config, shared with the GUI: every field is optional; missing keys fall
-/// back to CLI flags, then to the built-in defaults. Defined once in the library
-/// (see [`dnoise::config::Config`]) so both front ends read and write the same
-/// schema; the field names below are its fields.
 use dnoise::config::Config as FileConfig;
-
-/// Resolve one knob with explicit CLI flag > config-file value > built-in default
-/// precedence. `$cli` and `$cfg` are `Option`s; `$default` is the fallback value.
-macro_rules! pick {
-    ($cli:expr, $cfg:expr, $default:expr $(,)?) => {
-        $cli.or($cfg).unwrap_or($default)
-    };
-}
-
 fn main() -> Result<()> {
+    if let Some(result) = commands::dispatch() {
+        return result;
+    }
     let cli = Cli::parse();
     init_logging(cli.verbose, cli.quiet);
 
-    let cfg = match &cli.config {
+    let mut cfg = match &cli.config {
         Some(path) => FileConfig::load(path).map_err(anyhow::Error::msg)?,
         None => FileConfig::default(),
     };
-
-    // Each knob below resolves via `pick!`: CLI flag > config file > built-in default.
-    let d = FilterParams::default();
-    let mut params = FilterParams {
-        mz_half_width: pick!(cli.mz_half_width, cfg.mz_half_width, d.mz_half_width),
-        min_feature_length: pick!(
-            cli.min_feature_length,
-            cfg.min_feature_length,
-            d.min_feature_length
-        ),
-        max_internal_gap: pick!(
-            cli.max_internal_gap,
-            cfg.max_internal_gap,
-            d.max_internal_gap
-        ),
-        min_window_intensity: pick!(
-            cli.min_window_intensity,
-            cfg.min_window_intensity,
-            d.min_window_intensity
-        ),
-        min_feature_intensity: pick!(
-            cli.min_feature_intensity,
-            cfg.min_feature_intensity,
-            d.min_feature_intensity
-        ),
-        num_iterations: pick!(cli.iterations, cfg.iterations, d.num_iterations),
-    };
-
-    // ppm-based m/z window: when set, derive the vertical filter's TOF-index
-    // half-width from a mass tolerance at a reference m/z (CLI > config), overriding
-    // whatever --mz-half-width resolved to above.
-    if let Some(ppm) = cli.mz_ppm.or(cfg.mz_ppm) {
-        let ref_mz = cli.mz_ppm_ref.or(cfg.mz_ppm_ref);
-        let hw = dnoise::tof_half_width_for_ppm(&cli.input, ppm, ref_mz)?;
-        let ref_desc = ref_mz.map_or_else(|| "auto (acq midpoint)".to_string(), |m| m.to_string());
-        info!(
-            ppm,
-            ref_mz = %ref_desc,
-            mz_half_width = hw,
-            "config: m/z window derived from ppm"
-        );
-        params.mz_half_width = hw;
+    if let Some(value) = cli.mz_half_width {
+        cfg.mz_half_width = Some(value);
     }
-
-    // Pre-filter smoothing radius (decoupled from the filter knobs above): explicit
-    // CLI flag > config file > 0 (off).
-    let frame_half_width = cli.frame_half_width.or(cfg.frame_half_width).unwrap_or(0);
-
-    // Horizontal-halo filter: on by default; `--no-halo` (or `halo = false` in the
-    // config) disables it. Its knobs follow the same CLI > config > default.
-    let halo_enabled = if cli.no_halo {
-        false
-    } else {
-        cfg.halo.unwrap_or(true)
-    };
-    let d = HaloParams::default();
-    let halo = HaloParams {
-        peak_fraction: pick!(
-            cli.halo_peak_fraction,
-            cfg.halo_peak_fraction,
-            d.peak_fraction
-        ),
-        mz_idx_half_width: pick!(
-            cli.halo_mz_idx_half_width,
-            cfg.halo_mz_idx_half_width,
-            d.mz_idx_half_width
-        ),
-        scan_half_width: pick!(
-            cli.halo_scan_half_width,
-            cfg.halo_scan_half_width,
-            d.scan_half_width
-        ),
-    };
-
-    // MS/MS denoising (ddaPASEF): off unless --denoise-msms or `denoise_msms = true`.
-    let msms_enabled = cli.denoise_msms || cfg.denoise_msms.unwrap_or(false);
-    let d = MsmsFilterParams::default();
-    let msms = MsmsFilterParams {
-        mz_half_width: pick!(
-            cli.msms_mz_half_width,
-            cfg.msms_mz_half_width,
-            d.mz_half_width
-        ),
-        min_feature_length: pick!(
-            cli.msms_min_feature_length,
-            cfg.msms_min_feature_length,
-            d.min_feature_length
-        ),
-        max_internal_gap: pick!(
-            cli.msms_max_internal_gap,
-            cfg.msms_max_internal_gap,
-            d.max_internal_gap
-        ),
-        min_window_intensity: pick!(
-            cli.msms_min_window_intensity,
-            cfg.msms_min_window_intensity,
-            d.min_window_intensity
-        ),
-        min_feature_intensity: pick!(
-            cli.msms_min_feature_intensity,
-            cfg.msms_min_feature_intensity,
-            d.min_feature_intensity
-        ),
-        num_iterations: pick!(cli.msms_iterations, cfg.msms_iterations, d.num_iterations),
-    };
-
-    // Box-averaging smoother (post-halo, pre-watershed): off unless --smooth or
-    // `smooth = true`. CLI > config > default for its knobs.
-    let smooth_enabled = cli.smooth || cfg.smooth.unwrap_or(false);
-    let d = SmoothParams::default();
-    let smooth = SmoothParams {
-        mz_idx_half_width: pick!(
-            cli.smooth_mz_idx_half_width,
-            cfg.smooth_mz_idx_half_width,
-            d.mz_idx_half_width
-        ),
-        scan_half_width: pick!(
-            cli.smooth_scan_half_width,
-            cfg.smooth_scan_half_width,
-            d.scan_half_width
-        ),
-        iterations: pick!(cli.smooth_iterations, cfg.smooth_iterations, d.iterations),
-    };
-
-    // Watershed centroider (final stage): off unless --watershed or `watershed =
-    // true`. Its knobs follow the same CLI > config > default precedence.
-    let watershed_enabled = cli.watershed || cfg.watershed.unwrap_or(false);
-    let d = WatershedParams::default();
-    let watershed = WatershedParams {
-        box_scan: pick!(cli.watershed_box_scan, cfg.watershed_box_scan, d.box_scan),
-        box_mz_idx: pick!(
-            cli.watershed_box_mz_idx,
-            cfg.watershed_box_mz_idx,
-            d.box_mz_idx
-        ),
-        min_seed_intensity: pick!(
-            cli.watershed_min_seed_intensity,
-            cfg.watershed_min_seed_intensity,
-            d.min_seed_intensity
-        ),
-        min_centroid_total: pick!(
-            cli.watershed_min_centroid_total,
-            cfg.watershed_min_centroid_total,
-            d.min_centroid_total
-        ),
-        max_tof_offset: pick!(
-            cli.watershed_max_tof_offset,
-            cfg.watershed_max_tof_offset,
-            d.max_tof_offset
-        ),
-    };
-
-    // Greedy small-box centroider (alternative final stage): off unless
-    // --box-centroid or `box_centroid = true`. Mutually exclusive with watershed.
-    let box_centroid_enabled = cli.box_centroid || cfg.box_centroid.unwrap_or(false);
-    if box_centroid_enabled && watershed_enabled {
-        anyhow::bail!(
-            "--box-centroid and --watershed are mutually exclusive (both are terminal centroiders)"
-        );
+    if let Some(value) = cli.min_feature_length {
+        cfg.min_feature_length = Some(value);
     }
-    let d = BoxCentroidParams::default();
-    let box_centroid = BoxCentroidParams {
-        mz_idx_half_width: pick!(
-            cli.box_centroid_mz_idx_half,
-            cfg.box_centroid_mz_idx_half,
-            d.mz_idx_half_width
-        ),
-        scan_half_width: pick!(
-            cli.box_centroid_scan_half,
-            cfg.box_centroid_scan_half,
-            d.scan_half_width
-        ),
-        min_centroid_total: pick!(
-            cli.box_centroid_min_total,
-            cfg.box_centroid_min_total,
-            d.min_centroid_total
-        ),
-    };
-
-    // Boolean/operational flags: the CLI flag can only turn `all_frames` on; when
-    // absent it falls back to the config value (default false). Resolved here
-    // because the MS/MS gates' defaults key off whether MS/MS frames are filtered
-    // at all.
-    let all_frames = cli.all_frames || cfg.all_frames.unwrap_or(false);
-    let threads = cli.threads.or(cfg.threads);
-
-    // Acquisition-aware noise gates. All of them are on by default and each is a
-    // silent no-op when its defining geometry is absent, so a single default set
-    // picks the right gate per acquisition: the polygon builds only on
-    // ddaPASEF/PASEF (skipped when a diaPASEF window scheme is present), the MS1
-    // out-of-window gate builds only on diaPASEF. `--no-*` (or `<key> = false`)
-    // forces any of them off.
-
-    // diaPASEF isolation-window features (diaPASEF-only). `dia_window` gates
-    // out-of-window MS/MS points; `dia_per_window` makes the MS/MS filter run
-    // window-by-window (so a mobility run cannot fuse across a window boundary).
-    // Both share the DiaFrameMsMs* tables and both touch MS/MS frames, so both
-    // default on only when MS/MS frames are actually filtered (MS/MS denoising or
-    // --all-frames) — a plain MS1-only run leaves fragment spectra untouched.
-    // `--no-dia-window` / `--no-dia-per-window` (or `<key> = false`) force either off.
-    let dia_window_enabled = if cli.no_dia_window {
-        false
-    } else {
-        cli.dia_window || cfg.dia_window.unwrap_or(msms_enabled || all_frames)
-    };
-    let d = DiaWindowParams::default();
-    let dia_window = DiaWindowParams {
-        scan_pad: pick!(cli.dia_window_scan_pad, cfg.dia_window_scan_pad, d.scan_pad),
-    };
-    let dia_per_window = if cli.no_dia_per_window {
-        false
-    } else {
-        cli.dia_per_window || cfg.dia_per_window.unwrap_or(msms_enabled || all_frames)
-    };
-
-    // ddaPASEF MS/MS out-of-window gate: the ddaPASEF twin of `dia_window`,
-    // driven by PasefFrameMsMsInfo isolation events. Same conditional default —
-    // it touches MS/MS frames, so it is on only when they are actually filtered.
-    // On standard timsTOF ddaPASEF files it removes nothing (the acquisition
-    // writes MS/MS scans only inside scheduled events); it runs as a guarantee.
-    let dda_window_enabled = if cli.no_dda_window {
-        false
-    } else {
-        cli.dda_window || cfg.dda_window.unwrap_or(msms_enabled || all_frames)
-    };
-    let d = DdaWindowParams::default();
-    let dda_window = DdaWindowParams {
-        scan_pad: pick!(cli.dda_window_scan_pad, cfg.dda_window_scan_pad, d.scan_pad),
-    };
-
-    // diaPASEF MS1 out-of-window gate (on by default, diaPASEF-only): drop MS1
-    // points outside every isolation window's (m/z, mobility) region, padded in
-    // physical units. CLI > config > default for the pads.
-    let dia_ms1_enabled = if cli.no_dia_ms1_window {
-        false
-    } else {
-        cli.dia_ms1_window || cfg.dia_ms1_window.unwrap_or(true)
-    };
-    let d = DiaMs1WindowParams::default();
-    let dia_ms1 = DiaMs1WindowParams {
-        mz_pad: pick!(cli.dia_ms1_mz_pad, cfg.dia_ms1_mz_pad, d.mz_pad),
-        im_pad: pick!(cli.dia_ms1_im_pad, cfg.dia_ms1_im_pad, d.im_pad),
-    };
-
-    // MS1 selection-polygon gate (on by default): drop MS1 points outside the
-    // run's IMS PolygonFilter. CLI > config > default for the pads. Auto-detects
-    // polygon presence (no-op otherwise, including on diaPASEF).
-    let ms1_polygon_enabled = if cli.no_ms1_polygon {
-        false
-    } else {
-        cli.ms1_polygon || cfg.ms1_polygon.unwrap_or(true)
-    };
-    let d = Ms1PolygonParams::default();
-    let ms1_polygon = Ms1PolygonParams {
-        mz_pad: pick!(cli.ms1_polygon_mz_pad, cfg.ms1_polygon_mz_pad, d.mz_pad),
-        im_pad: pick!(cli.ms1_polygon_im_pad, cfg.ms1_polygon_im_pad, d.im_pad),
-    };
-
-    // Region-of-interest crop (CLI > config for each bound). A subset of the raw
-    // acquisition, applied to every frame; empty when no bound is set.
-    let crop = CropParams {
-        mz_min: cli.mz_min.or(cfg.mz_min),
-        mz_max: cli.mz_max.or(cfg.mz_max),
-        im_min: cli.im_min.or(cfg.im_min),
-        im_max: cli.im_max.or(cfg.im_max),
-        rt_min: cli.rt_min.or(cfg.rt_min),
-        rt_max: cli.rt_max.or(cfg.rt_max),
-        min_intensity: cli.min_intensity.or(cfg.min_intensity),
-        max_intensity: cli.max_intensity.or(cfg.max_intensity),
-    };
-    let crop_only = cli.crop_only || cfg.crop_only.unwrap_or(false);
-    if crop_only && crop.is_empty() {
-        anyhow::bail!("--crop-only needs at least one crop bound (--mz-min/--im-min/--rt-min/…)");
+    if let Some(value) = cli.max_internal_gap {
+        cfg.max_internal_gap = Some(value);
     }
-
+    if let Some(value) = cli.min_window_intensity {
+        cfg.min_window_intensity = Some(value);
+    }
+    if let Some(value) = cli.min_feature_intensity {
+        cfg.min_feature_intensity = Some(value);
+    }
+    if let Some(value) = cli.iterations {
+        cfg.iterations = Some(value);
+    }
+    if let Some(value) = cli.frame_half_width {
+        cfg.frame_half_width = None;
+        cfg.ms1_neighbor_radius = Some(value);
+    }
+    if let Some(value) = cli.prm_neighbor_radius {
+        cfg.prm_neighbor_radius = Some(value);
+    }
+    if let Some(value) = cli.dia_neighbor_radius {
+        cfg.dia_neighbor_radius = Some(value);
+    }
+    if let Some(value) = cli.neighbor_max_rt_gap {
+        cfg.neighbor_max_rt_gap = Some(value);
+    }
+    if let Some(value) = cli.halo_peak_fraction {
+        cfg.halo_peak_fraction = Some(value);
+    }
+    if let Some(value) = cli.halo_mz_idx_half_width {
+        cfg.halo_mz_idx_half_width = Some(value);
+    }
+    if let Some(value) = cli.halo_scan_half_width {
+        cfg.halo_scan_half_width = Some(value);
+    }
+    if cli.denoise_msms {
+        cfg.denoise_msms = Some(true);
+    }
+    if let Some(value) = cli.msms_mz_half_width {
+        cfg.msms_mz_half_width = Some(value);
+    }
+    if let Some(value) = cli.msms_min_feature_length {
+        cfg.msms_min_feature_length = Some(value);
+    }
+    if let Some(value) = cli.msms_max_internal_gap {
+        cfg.msms_max_internal_gap = Some(value);
+    }
+    if let Some(value) = cli.msms_min_window_intensity {
+        cfg.msms_min_window_intensity = Some(value);
+    }
+    if let Some(value) = cli.msms_min_feature_intensity {
+        cfg.msms_min_feature_intensity = Some(value);
+    }
+    if let Some(value) = cli.msms_iterations {
+        cfg.msms_iterations = Some(value);
+    }
+    if cli.smooth {
+        cfg.smooth = Some(true);
+    }
+    if let Some(value) = cli.smooth_mz_idx_half_width {
+        cfg.smooth_mz_idx_half_width = Some(value);
+    }
+    if let Some(value) = cli.smooth_scan_half_width {
+        cfg.smooth_scan_half_width = Some(value);
+    }
+    if let Some(value) = cli.smooth_iterations {
+        cfg.smooth_iterations = Some(value);
+    }
+    if cli.watershed {
+        cfg.watershed = Some(true);
+    }
+    if let Some(value) = cli.watershed_box_scan {
+        cfg.watershed_box_scan = Some(value);
+    }
+    if let Some(value) = cli.watershed_box_mz_idx {
+        cfg.watershed_box_mz_idx = Some(value);
+    }
+    if let Some(value) = cli.watershed_min_seed_intensity {
+        cfg.watershed_min_seed_intensity = Some(value);
+    }
+    if let Some(value) = cli.watershed_min_centroid_total {
+        cfg.watershed_min_centroid_total = Some(value);
+    }
+    if let Some(value) = cli.watershed_max_tof_offset {
+        cfg.watershed_max_tof_offset = Some(value);
+    }
+    if cli.box_centroid {
+        cfg.box_centroid = Some(true);
+    }
+    if let Some(value) = cli.box_centroid_mz_idx_half {
+        cfg.box_centroid_mz_idx_half = Some(value);
+    }
+    if let Some(value) = cli.box_centroid_scan_half {
+        cfg.box_centroid_scan_half = Some(value);
+    }
+    if let Some(value) = cli.box_centroid_min_total {
+        cfg.box_centroid_min_total = Some(value);
+    }
+    if cli.dia_window {
+        cfg.dia_window = Some(true);
+    }
+    if cli.no_dia_window {
+        cfg.dia_window = Some(false);
+    }
+    if let Some(value) = cli.dia_window_scan_pad {
+        cfg.dia_window_scan_pad = Some(value);
+    }
+    if cli.dia_per_window {
+        cfg.dia_per_window = Some(true);
+    }
+    if cli.no_dia_per_window {
+        cfg.dia_per_window = Some(false);
+    }
+    if cli.dda_window {
+        cfg.dda_window = Some(true);
+    }
+    if cli.no_dda_window {
+        cfg.dda_window = Some(false);
+    }
+    if let Some(value) = cli.dda_window_scan_pad {
+        cfg.dda_window_scan_pad = Some(value);
+    }
+    if cli.dia_ms1_window {
+        cfg.dia_ms1_window = Some(true);
+    }
+    if cli.no_dia_ms1_window {
+        cfg.dia_ms1_window = Some(false);
+    }
+    if let Some(value) = cli.dia_ms1_mz_pad {
+        cfg.dia_ms1_mz_pad = Some(value);
+    }
+    if let Some(value) = cli.dia_ms1_im_pad {
+        cfg.dia_ms1_im_pad = Some(value);
+    }
+    if cli.ms1_polygon {
+        cfg.ms1_polygon = Some(true);
+    }
+    if cli.no_ms1_polygon {
+        cfg.ms1_polygon = Some(false);
+    }
+    if let Some(value) = cli.ms1_polygon_mz_pad {
+        cfg.ms1_polygon_mz_pad = Some(value);
+    }
+    if let Some(value) = cli.ms1_polygon_im_pad {
+        cfg.ms1_polygon_im_pad = Some(value);
+    }
+    if let Some(value) = cli.mz_min {
+        cfg.mz_min = Some(value);
+    }
+    if let Some(value) = cli.mz_max {
+        cfg.mz_max = Some(value);
+    }
+    if let Some(value) = cli.im_min {
+        cfg.im_min = Some(value);
+    }
+    if let Some(value) = cli.im_max {
+        cfg.im_max = Some(value);
+    }
+    if let Some(value) = cli.rt_min {
+        cfg.rt_min = Some(value);
+    }
+    if let Some(value) = cli.rt_max {
+        cfg.rt_max = Some(value);
+    }
+    if let Some(value) = cli.min_intensity {
+        cfg.min_intensity = Some(value);
+    }
+    if let Some(value) = cli.max_intensity {
+        cfg.max_intensity = Some(value);
+    }
+    if cli.crop_only {
+        cfg.crop_only = Some(true);
+    }
+    if let Some(value) = cli.mz_ppm {
+        cfg.mz_ppm = Some(value);
+    }
+    if let Some(value) = cli.mz_ppm_ref {
+        cfg.mz_ppm_ref = Some(value);
+    }
+    if cli.all_frames {
+        cfg.all_frames = Some(true);
+    }
+    if let Some(value) = cli.threads {
+        cfg.threads = Some(value);
+    }
+    if let Some(value) = cli.frame_batch_size {
+        cfg.frame_batch_size = Some(value);
+    }
+    if cli.skip_validation {
+        cfg.skip_validation = Some(true);
+    } else if cli.validate {
+        cfg.skip_validation = Some(false);
+    }
+    if cli.no_halo {
+        cfg.halo = Some(false);
+    }
+    let resolved = cfg.resolve(&cli.input)?;
+    let params = resolved.filter;
+    let crop = resolved.crop;
+    let crop_only = resolved.crop_only;
+    let stages = resolved.stages();
     // Dry-run / sampling / report.
     let dry_run = cli.dry_run;
     if dry_run && cli.in_place {
@@ -658,65 +595,12 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    if let Some(t) = threads {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(t)
-            .build_global()
-            .ok();
-    }
-
-    let stages = Stages {
-        filter_all_frames: all_frames,
-        frame_half_width,
-        halo: halo_enabled.then_some(&halo),
-        denoise_msms: msms_enabled.then_some(&msms),
-        smooth: smooth_enabled.then_some(&smooth),
-        watershed: watershed_enabled.then_some(&watershed),
-        box_centroid: box_centroid_enabled.then_some(&box_centroid),
-        dia_window: dia_window_enabled.then_some(&dia_window),
-        dda_window: dda_window_enabled.then_some(&dda_window),
-        dia_per_window,
-        dia_ms1: dia_ms1_enabled.then_some(&dia_ms1),
-        ms1_polygon: ms1_polygon_enabled.then_some(&ms1_polygon),
-    };
-
-    // Echo the effective configuration so a caller can confirm exactly which knobs
-    // and stages this run used (after config-file + CLI + default resolution) — the
-    // single most useful thing for reproducing or debugging a run.
-    info!(
-        mz_half_width = params.mz_half_width,
-        min_feature_length = params.min_feature_length,
-        max_internal_gap = params.max_internal_gap,
-        min_window_intensity = params.min_window_intensity,
-        min_feature_intensity = params.min_feature_intensity,
-        iterations = params.num_iterations,
-        "config: vertical filter"
-    );
-    info!(
-        all_frames,
-        frame_half_width,
-        halo = halo_enabled,
-        denoise_msms = msms_enabled,
-        smooth = smooth_enabled,
-        watershed = watershed_enabled,
-        box_centroid = box_centroid_enabled,
-        dia_window = dia_window_enabled,
-        dda_window = dda_window_enabled,
-        dia_per_window,
-        dia_ms1 = dia_ms1_enabled,
-        ms1_polygon = ms1_polygon_enabled,
-        crop = !crop.is_empty(),
-        crop_only,
-        dry_run,
-        "config: enabled stages"
-    );
-
     // Resolve where to write. In-place mode writes to a temp sibling folder and
     // swaps it over the input on success; otherwise the OUTPUT argument is used. A
     // dry run writes nothing, so OUTPUT is optional and the path is only a
     // placeholder the pipeline never touches.
     let out_path = if cli.in_place {
-        sibling_with_suffix(&cli.input, ".dnoise-tmp")
+        cli.input.clone()
     } else if dry_run {
         cli.output
             .clone()
@@ -726,7 +610,7 @@ fn main() -> Result<()> {
             .clone()
             .context("provide an OUTPUT folder or use --in-place")?
     };
-    // The temp folder is ours to clobber, so force-overwrite any stale leftover.
+    // Explicit in-place mode authorizes replacing the original after validation.
     let force = cli.force || cli.in_place;
 
     let options = RunOptions {
@@ -736,6 +620,8 @@ fn main() -> Result<()> {
         crop_only,
         sample,
         cancel: None,
+        frame_batch_size: cfg.frame_batch_size,
+        skip_validation: cfg.skip_validation.unwrap_or(false),
     };
 
     // Progress rendering adapts to the output: an interactive bar when stderr is a
@@ -749,70 +635,47 @@ fn main() -> Result<()> {
     } else {
         pb.set_draw_target(ProgressDrawTarget::hidden());
     }
-    let start = Instant::now();
-    let mut last_decile = 0u64;
-    let result =
-        dnoise::denoise_with_options(&cli.input, &out_path, &params, &stages, &options, |p| {
-            pb.set_length(p.frames_total as u64);
-            pb.set_position(p.frames_done as u64);
-            if !interactive && p.frames_total > 0 {
-                let pct = 100 * p.frames_done as u64 / p.frames_total as u64;
-                let decile = pct - pct % 10;
-                if decile > last_decile {
-                    last_decile = decile;
-                    info!(
-                        frames_done = p.frames_done,
-                        frames_total = p.frames_total,
-                        pct,
-                        "denoise: progress"
-                    );
-                }
-            }
-        });
-    pb.finish_and_clear();
-    // In-place mode owns the temp sibling folder, so clean up a partial one on
-    // failure rather than leaving it behind for the next run to clobber.
-    let stats = match result {
-        Ok(stats) => stats,
-        Err(e) => {
-            if cli.in_place {
-                std::fs::remove_dir_all(&out_path).ok();
-            }
-            return Err(e.into());
+    if let Some(report) = &cli.report {
+        dnoise::output::check_disjoint(&cli.input, report)?;
+        if !dry_run {
+            dnoise::output::check_disjoint(&out_path, report)?;
         }
-    };
-
-    // In-place swap: move the original aside, install the denoised folder under the
-    // input's name, then drop the backup. On a failed install, restore the original.
-    // (A dry run produced no temp folder, so there is nothing to swap.)
-    if cli.in_place && !dry_run {
-        let backup = sibling_with_suffix(&cli.input, ".dnoise-old");
-        if backup.exists() {
-            std::fs::remove_dir_all(&backup)
-                .with_context(|| format!("removing stale backup {}", backup.display()))?;
-        }
-        std::fs::rename(&cli.input, &backup)
-            .with_context(|| format!("moving original {} aside", cli.input.display()))?;
-        if let Err(e) = std::fs::rename(&out_path, &cli.input) {
-            std::fs::rename(&backup, &cli.input).ok();
-            return Err(anyhow::Error::new(e).context(format!(
-                "installing denoised folder at {}; original restored",
-                cli.input.display()
-            )));
-        }
-        // The swap already succeeded, so the denoised folder is correctly installed
-        // at the input path. Failing to remove the backup is not a failure of the
-        // operation — warn and leave it for manual cleanup instead of reporting the
-        // whole run as failed (which would misleadingly imply the data is bad).
-        if let Err(e) = std::fs::remove_dir_all(&backup) {
-            warn!(
-                input = %cli.input.display(),
-                backup = %backup.display(),
-                error = %e,
-                "denoised folder installed, but the backup could not be removed (leftover on disk)"
-            );
+        if report.exists() {
+            anyhow::bail!("report already exists: {}", report.display());
         }
     }
+    if dnoise::provenance::read(&cli.input)?.is_some() {
+        tracing::warn!("input has dnoise history; this run processes already modified data");
+    }
+    let start = Instant::now();
+    let mut last_decile = 0u64;
+    let progress = |p: dnoise::Progress| {
+        pb.set_length(p.frames_total as u64);
+        pb.set_position(p.frames_done as u64);
+        if !interactive && p.frames_total > 0 {
+            let pct = 100 * p.frames_done as u64 / p.frames_total as u64;
+            let decile = pct - pct % 10;
+            if decile > last_decile {
+                last_decile = decile;
+                info!(
+                    frames_done = p.frames_done,
+                    frames_total = p.frames_total,
+                    pct,
+                    "denoise: progress"
+                );
+            }
+        }
+    };
+    let stats = cfg.in_thread_pool(|| {
+        if cli.in_place {
+            dnoise::denoise_in_place(&cli.input, &params, &stages, &options, progress)
+        } else {
+            dnoise::denoise_with_options(
+                &cli.input, &out_path, &params, &stages, &options, progress,
+            )
+        }
+    })?;
+    pb.finish_and_clear();
     let elapsed = start.elapsed();
     let pct = if stats.raw_points > 0 {
         100.0 * stats.kept_points as f64 / stats.raw_points as f64
@@ -823,9 +686,13 @@ fn main() -> Result<()> {
     // Optional JSON report: the effective config plus the reduction stats, for
     // parameter sweeps and provenance. Written for both real and dry runs.
     if let Some(path) = &cli.report {
-        let report = build_report(&cli, &params, &stages, &crop, &stats, elapsed);
-        std::fs::write(path, serde_json::to_string_pretty(&report)? + "\n")
-            .with_context(|| format!("writing report to {}", path.display()))?;
+        let report = dnoise::provenance::report(&cli.input, &params, &stages, &options, &stats);
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        file.write_all((serde_json::to_string_pretty(&report)? + "\n").as_bytes())?;
         info!(report = %path.display(), "wrote run report");
     }
 
@@ -848,97 +715,6 @@ fn main() -> Result<()> {
         elapsed.as_secs_f64()
     );
     Ok(())
-}
-
-/// Assemble the `--report` JSON: the run's effective configuration (filter knobs,
-/// enabled stages, crop, preset) alongside the reduction statistics. Serialised
-/// with `serde_json` so downstream tooling (sweeps, provenance) can parse it.
-fn build_report(
-    cli: &Cli,
-    params: &FilterParams,
-    stages: &Stages,
-    crop: &CropParams,
-    stats: &dnoise::DenoiseStats,
-    elapsed: std::time::Duration,
-) -> serde_json::Value {
-    use serde_json::json;
-    let pct = |kept: u64, raw: u64| {
-        if raw > 0 {
-            (10_000.0 * kept as f64 / raw as f64).round() / 100.0
-        } else {
-            0.0
-        }
-    };
-    json!({
-        "input": cli.input.display().to_string(),
-        "output": (!stats.dry_run).then(|| out_display(cli)),
-        "acquisition": dnoise::detect_acquisition(&cli.input)
-            .map(|a| format!("{a:?}"))
-            .unwrap_or_else(|_| "unknown".into()),
-        "dry_run": stats.dry_run,
-        "sample": cli.sample.map(|f| json!({ "fraction": f, "seed": cli.sample_seed })),
-        "config": {
-            "vertical_filter": {
-                "mz_half_width": params.mz_half_width,
-                "min_feature_length": params.min_feature_length,
-                "max_internal_gap": params.max_internal_gap,
-                "min_window_intensity": params.min_window_intensity,
-                "min_feature_intensity": params.min_feature_intensity,
-                "iterations": params.num_iterations,
-            },
-            "mz_ppm": cli.mz_ppm,
-            "stages": {
-                "all_frames": stages.filter_all_frames,
-                "frame_half_width": stages.frame_half_width,
-                "halo": stages.halo.is_some(),
-                "denoise_msms": stages.denoise_msms.is_some(),
-                "smooth": stages.smooth.is_some(),
-                "watershed": stages.watershed.is_some(),
-                "box_centroid": stages.box_centroid.is_some(),
-                "dia_window": stages.dia_window.is_some(),
-                "dda_window": stages.dda_window.is_some(),
-                "dia_per_window": stages.dia_per_window,
-                "dia_ms1_window": stages.dia_ms1.is_some(),
-                "ms1_polygon": stages.ms1_polygon.is_some(),
-            },
-            "crop": {
-                "mz_min": crop.mz_min, "mz_max": crop.mz_max,
-                "im_min": crop.im_min, "im_max": crop.im_max,
-                "rt_min": crop.rt_min, "rt_max": crop.rt_max,
-                "min_intensity": crop.min_intensity, "max_intensity": crop.max_intensity,
-                "crop_only": cli.crop_only,
-            },
-        },
-        "stats": {
-            "frames": stats.frames,
-            "ms1_frames": stats.ms1_frames,
-            "msms_frames": stats.msms_frames,
-            "cropped_frames": stats.cropped_frames,
-            "processed_frames": stats.processed_frames,
-            "raw_points": stats.raw_points,
-            "kept_points": stats.kept_points,
-            "kept_pct": pct(stats.kept_points, stats.raw_points),
-            "raw_ms1_points": stats.raw_ms1_points,
-            "kept_ms1_points": stats.kept_ms1_points,
-            "ms1_kept_pct": pct(stats.kept_ms1_points, stats.raw_ms1_points),
-            "raw_summed_intensity": stats.raw_summed_intensity,
-            "kept_summed_intensity": stats.kept_summed_intensity,
-        },
-        "elapsed_seconds": (elapsed.as_secs_f64() * 1000.0).round() / 1000.0,
-    })
-}
-
-/// Best-effort display path of the output folder for the report (empty for
-/// in-place, where the input path is the destination).
-fn out_display(cli: &Cli) -> String {
-    if cli.in_place {
-        cli.input.display().to_string()
-    } else {
-        cli.output
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default()
-    }
 }
 
 #[cfg(test)]

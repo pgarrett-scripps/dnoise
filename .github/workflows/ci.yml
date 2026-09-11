@@ -11,32 +11,36 @@ env:
 jobs:
   test:
     name: fmt + clippy + test
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       # System libraries the egui/eframe GUI links against on Linux.
       - name: Install Linux GUI deps
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
-        run: cargo fmt --all --check
+        run: cargo +1.97.1 fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo +1.97.1 clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo +1.97.1 test --workspace --locked
 
   # Cargo.toml advertises rust-version = "1.85" as the minimum supported
   # compiler, and nothing checked it: a 2024-edition feature stabilized after
@@ -49,9 +53,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets
+      - run: cargo +1.85.0 check --all-targets --locked
 
-  # What a crate consumer actually gets. `cargo test --workspace` always builds
+  # What a crate consumer actually gets. `cargo +1.97.1 test --workspace --locked` always builds
   # with default features, so nothing here exercised the library without the CLI
   # -- and the feature gating is hand-written, so it can and does drift.
   no-default-features:
@@ -61,5 +65,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --no-default-features
-      - run: cargo test --no-default-features --lib
+      - run: cargo +stable check --no-default-features --locked
+      - run: cargo +stable test --no-default-features --lib --locked
+
+  stable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +stable test --locked -p dnoise
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +stable install cargo-audit --locked
+      - run: cargo +stable audit
+
+  verifier-tests:
+    name: SDK comparison logic (no proprietary SDK required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r examples/requirements-validation.txt
+      - run: python -m unittest discover -s examples -p 'test_validate_acquisitions.py'

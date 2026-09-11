@@ -15,6 +15,13 @@ pub type Result<T, E = DnoiseError> = std::result::Result<T, E>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DnoiseError {
+    /// Invalid input, configuration, or output path.
+    #[error("{0}")]
+    InvalidInput(String),
+
+    /// Installing output failed and recovery requires user attention.
+    #[error("{0}")]
+    Recovery(String),
     /// The input path is not a Bruker `.d` folder (missing `analysis.tdf` /
     /// `analysis.tdf_bin`).
     #[error("{0} is not a Bruker .d folder (missing analysis.tdf / analysis.tdf_bin)")]
@@ -64,6 +71,13 @@ pub enum DnoiseError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DecodeError {
+    /// Decompression or encoding would exceed the supported frame size.
+    #[error("frame exceeds the 256 MiB size limit")]
+    SizeLimit,
+    /// Scan counts, offsets, or TOF deltas are inconsistent.
+    #[error("invalid frame layout or coordinates")]
+    InvalidLayout,
+
     /// Record is shorter than the fixed 8-byte header.
     #[error("record shorter than header")]
     ShortRecord,

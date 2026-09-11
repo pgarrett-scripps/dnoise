@@ -2,7 +2,7 @@
 
 /// Knobs for [`crate::filter`]. Defaults match the tuned PXD070049 benchmark
 /// configuration (`benchmark/config/dnoise.toml`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct FilterParams {
     /// Column half-width in TOF indices: window spans `[c - w, c + w]`.
     pub mz_half_width: u32,
@@ -39,7 +39,7 @@ impl Default for FilterParams {
 /// if below `peak_fraction` of that reference. Operates in integer
 /// `(scan, TOF index)` space. Defaults match the tuned PXD070049 benchmark
 /// configuration (`benchmark/config/dnoise.toml`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct HaloParams {
     /// Drop a peak below this fraction of the off-column box-max reference.
     pub peak_fraction: f64,
@@ -66,7 +66,7 @@ impl Default for HaloParams {
 /// the halo filter and before the watershed centroider to stabilise seeding:
 /// noise-driven local intensity spikes otherwise make watershed split one ion
 /// into several centroids.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct SmoothParams {
     /// Half-width of the averaging box along TOF index.
     pub mz_idx_half_width: u32,
@@ -92,7 +92,7 @@ impl Default for SmoothParams {
 /// filters (which select a subset of points), this is a *lossy* reduction that
 /// typically shrinks the surviving point count to a small fraction. Operates in
 /// integer `(scan, TOF index)` space. Defaults match `koth_rust`'s watershed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct WatershedParams {
     /// Nearest-neighbour reach along the ion-mobility scan axis.
     pub box_scan: u32,
@@ -127,7 +127,7 @@ impl Default for WatershedParams {
 /// than collapsed to a point. Boxes with summed intensity below
 /// `min_centroid_total` are dropped (the optional denoising floor; 0 conserves
 /// total intensity exactly).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct BoxCentroidParams {
     /// Box half-width along TOF index (m/z); keep tight to preserve m/z precision.
     pub mz_idx_half_width: u32,
@@ -151,7 +151,7 @@ impl Default for BoxCentroidParams {
 /// The window scan intervals come from the data (`DiaFrameMsMsWindows`); the only
 /// tunable is `scan_pad`, which symmetrically widens each window to tolerate
 /// signal a few mobility scans past an isolation edge before it is gated out.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct DiaWindowParams {
     /// Scans of leniency added to each side of every isolation window (default 0).
     pub scan_pad: u32,
@@ -163,7 +163,7 @@ pub struct DiaWindowParams {
 /// far the acquisition writes MS/MS scans only inside the scheduled isolation
 /// events, so this gate removes nothing there — it exists as a guarantee, and
 /// for acquisitions that behave otherwise.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct DdaWindowParams {
     /// Scans of leniency added to each side of every isolation event (default 0).
     pub scan_pad: u32,
@@ -177,7 +177,7 @@ pub struct DdaWindowParams {
 /// windows are defined in m/z and the calibration is needed anyway — so a
 /// precursor near a window edge keeps its full isotopic envelope (isotopes run to
 /// higher m/z) and mobility spread.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct DiaMs1WindowParams {
     /// m/z leniency added to each side of every window, in **Daltons**. Maps
     /// directly to isotopes (spaced `1/charge` Da), uniformly across the m/z range.
@@ -204,7 +204,7 @@ impl Default for DiaMs1WindowParams {
 /// keeps its isotopic envelope (m/z) and mobility spread (1/K0). Defaults match
 /// [`DiaMs1WindowParams`]; set both pads to `0.0` to reproduce the literal
 /// polygon.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Ms1PolygonParams {
     /// m/z leniency added to each side of the polygon interior, in **Daltons**
     /// (isotopes run to higher m/z, spaced `1/charge` Da).
@@ -225,7 +225,7 @@ impl Default for Ms1PolygonParams {
 /// Vertical-filter knobs for the ddaPASEF MS/MS path ([`crate::msms`]). Mirrors
 /// [`FilterParams`] but with defaults tuned for the short (~25-scan) precursor
 /// isolation windows: a smaller `min_feature_length`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct MsmsFilterParams {
     /// Column half-width in TOF indices.
     pub mz_half_width: u32,
@@ -276,7 +276,7 @@ impl MsmsFilterParams {
 /// ranges via the run calibration; retention time is compared per frame and an
 /// out-of-window frame is emitted empty (never deleted), keeping the frame axis and
 /// every table that references it valid.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 pub struct CropParams {
     /// Lower m/z bound (Da), inclusive. `None` = no lower m/z limit.
     pub mz_min: Option<f64>,
@@ -443,6 +443,29 @@ mod tests {
     }
 }
 
+/// Experimental temporal support for PRM and DIA filtering. The summed spectrum
+/// informs a keep mask only; output points retain their native intensities.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct NeighborParams {
+    /// Previous and next compatible observations per PRM target (0 = off).
+    pub prm_radius: usize,
+    /// Previous and next compatible observations per DIA isolation window (0 = off).
+    pub dia_radius: usize,
+    /// Maximum absolute retention-time distance from the current frame, in seconds.
+    /// Applies to MS1 (`Stages::frame_half_width`), PRM and DIA. Default: 5 seconds.
+    pub max_rt_gap_seconds: f64,
+}
+
+impl Default for NeighborParams {
+    fn default() -> Self {
+        Self {
+            prm_radius: 0,
+            dia_radius: 0,
+            max_rt_gap_seconds: 5.0,
+        }
+    }
+}
+
 /// Optional pipeline stages layered on top of the core vertical-IM filter
 /// ([`FilterParams`]), passed as one value to [`crate::denoise`] and
 /// [`crate::denoise_with_progress`] instead of a dozen positional arguments.
@@ -451,17 +474,18 @@ mod tests {
 /// `false`, `frame_half_width` is `0` (off), and the `Option` stages are `None`.
 /// Enable a stage by setting its field, borrowing a parameter struct that lives
 /// for the call. Each field references the stage documented on its target module.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct Stages<'a> {
     /// Filter MS/MS frames too. When `false` (default), only MS1 frames are
     /// filtered and MS/MS frames are re-encoded unchanged — the vertical-IM filter
     /// is an MS1 algorithm that strips most MS/MS fragment signal.
     pub filter_all_frames: bool,
-    /// Pre-filter MS1 running-average radius (see [`crate::average`]): each MS1
-    /// frame's keep/drop decision uses the summed `2*r+1` MS1-frame neighborhood.
-    /// `0` (default) reproduces the unsmoothed pipeline. MS/MS frames are never
-    /// averaged.
+    /// MS1 neighbor radius: sum up to this many compatible MS1 observations on
+    /// either side for the filtering decision only (0 = off). Native output points
+    /// and intensities are preserved unless postprocessing is explicitly enabled.
     pub frame_half_width: usize,
+    /// PRM/DIA neighbor radii and the shared retention-time limit, including MS1.
+    pub neighbors: NeighborParams,
     /// Horizontal-halo filter ([`crate::halo`]) after the vertical filter, removing
     /// the weak m/z halo flanking bright peaks. `None` disables it.
     pub halo: Option<&'a HaloParams>,
@@ -470,6 +494,9 @@ pub struct Stages<'a> {
     /// fragment scans across frames before filtering (see [`crate::msms`]);
     /// diaPASEF runs the same filter on each whole MS/MS frame. `None` leaves MS/MS
     /// unchanged.
+    /// PRM uses experimental, independent isolation-event filtering without
+    /// cross-frame pooling by default. Optional `neighbors` enable local support. Its halo, smoothing and centroiding also stay inside
+    /// each event. Mixed and unknown acquisitions reject MS/MS denoising.
     pub denoise_msms: Option<&'a MsmsFilterParams>,
     /// Box-averaging smoother ([`crate::smooth`]) on each filtered frame's
     /// survivors (after halo, before centroiding) to stabilise watershed seeding.
@@ -504,7 +531,8 @@ pub struct Stages<'a> {
     pub dia_ms1: Option<&'a DiaMs1WindowParams>,
     /// ddaPASEF MS1 selection-polygon gate ([`crate::polygon`]): drop MS1 points
     /// outside the run's IMS PolygonFilter (never-selected precursor space).
-    /// Auto-detected; skipped on diaPASEF and when the run stores no polygon.
+    /// Auto-detected; skipped on diaPASEF, PRM, mixed/unknown acquisitions and
+    /// when the run stores no polygon.
     /// `None` disables it.
     pub ms1_polygon: Option<&'a Ms1PolygonParams>,
 }

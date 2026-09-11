@@ -5,12 +5,18 @@ use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod acquisition;
+pub(crate) mod dia;
+pub(crate) use acquisition::{
+    PrmWindows, detect as detect_acquisition, inspect as inspect_acquisition,
+};
+
 /// Byte length of the leading header in `analysis.tdf_bin` that precedes the
 /// first frame. Bruker reserves a (typically 64-byte, sometimes empty) block at
 /// the start of the file; it equals the smallest `Frames.TimsId`. We copy it
 /// verbatim and shift all rewritten offsets past it so the layout matches Bruker.
 pub fn binary_header_len(tdf_path: &Path) -> Result<u64> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let min: Option<i64> = conn
         .query_row("SELECT MIN(TimsId) FROM Frames", [], |r| r.get(0))
         .optional()?;
@@ -24,7 +30,7 @@ pub struct FrameMeta {
     pub id: usize,
     pub num_scans: usize,
     pub num_peaks: u64,
-    /// Bruker `MsMsType`: 0 = MS1, non-zero = MS/MS (8 = ddaPASEF, 9 = diaPASEF).
+    /// Bruker `MsMsType`: 0 = MS1; 8 = ddaPASEF, 9 = diaPASEF, 10 = prm-PASEF.
     pub ms_ms_type: i64,
     /// Retention time in **seconds** (`Frames.Time`). Used by the RT crop.
     pub rt: f64,
@@ -54,7 +60,7 @@ pub struct PasefWindow {
 /// diaPASEF `.d` files omit the table entirely, which is treated as "no ddaPASEF
 /// windows" (the caller then falls back to whole-frame MS/MS filtering).
 pub fn read_pasef_msms(tdf_path: &Path) -> Result<Vec<PasefWindow>> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let has_table: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PasefFrameMsMsInfo'",
@@ -148,7 +154,7 @@ impl DiaWindows {
 /// "no DIA windows" and fall back to whole-frame handling. Per-group intervals are
 /// sorted by `ScanNumBegin` and merged so adjacent/overlapping windows coalesce.
 pub fn read_dia_windows(tdf_path: &Path) -> Result<DiaWindows> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let has = |name: &str| -> Result<bool> {
         Ok(conn
             .query_row(
@@ -230,7 +236,7 @@ pub struct DiaMs1Box {
 /// no m/z information (ddaPASEF or non-PASEF data), which the caller treats as "no
 /// MS1 gate".
 pub fn read_dia_ms1_boxes(tdf_path: &Path) -> Result<Vec<DiaMs1Box>> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let has_table: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='DiaFrameMsMsWindows'",
@@ -273,11 +279,11 @@ pub fn read_dia_ms1_boxes(tdf_path: &Path) -> Result<Vec<DiaMs1Box>> {
 /// The acquisition gates convert their physical-unit definitions to index space
 /// ONCE, with the run-level calibration timsrust exposes. That is exact only
 /// while every frame references the same calibration segment — true of every
-/// file in the paper's benchmark — so the writer warns when either count
-/// exceeds one. Missing tables or columns (older schemas) count as one segment:
+/// file in the paper's benchmark — so physical gates/crops reject multiple references
+/// in dimensions they convert. Missing tables or columns (older schemas) count as one segment:
 /// there is nothing to disagree with the run-level calibration there.
 pub fn count_calibration_segments(tdf_path: &Path) -> Result<(usize, usize)> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut cols = std::collections::HashSet::new();
     let mut stmt = conn.prepare("PRAGMA table_info(Frames)")?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
@@ -307,7 +313,7 @@ pub fn count_calibration_segments(tdf_path: &Path) -> Result<(usize, usize)> {
 /// stored value, fewer than 3 vertices, or mismatched array lengths), which the
 /// caller treats as "no MS1 polygon gate".
 pub fn read_selection_polygon(tdf_path: &Path) -> Result<Option<(Vec<f64>, Vec<f64>)>> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let has_tables: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PropertyDefinitions'",
@@ -362,7 +368,7 @@ pub fn read_selection_polygon(tdf_path: &Path) -> Result<Option<(Vec<f64>, Vec<f
 
 /// Read `(Id, NumScans, NumPeaks, MsMsType, Time)` for every frame, ordered by `Id`.
 pub fn read_frame_meta(tdf_path: &Path) -> Result<Vec<FrameMeta>> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt =
         conn.prepare("SELECT Id, NumScans, NumPeaks, MsMsType, Time FROM Frames ORDER BY Id")?;
     let rows = stmt.query_map([], |r| {
@@ -382,7 +388,7 @@ pub fn read_frame_meta(tdf_path: &Path) -> Result<Vec<FrameMeta>> {
 /// ppm-to-TOF-index conversion. Returns `None` if either key is absent or
 /// unparseable.
 pub fn read_mz_acq_range(tdf_path: &Path) -> Result<Option<(f64, f64)>> {
-    let conn = Connection::open(tdf_path)?;
+    let conn = Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let val = |key: &str| -> Result<Option<f64>> {
         Ok(conn
             .query_row(
