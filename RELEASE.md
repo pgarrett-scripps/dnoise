@@ -11,9 +11,12 @@ is not. Nothing here has been tagged, published, or archived.
    availability statement and SI. Tracked in the paper repo's `TODO.md`, which
    has the ordered steps. This does not block the software release, only the
    claim that the paper and the release agree everywhere.
-2. `git tag v0.3.0 && git push --tags`. That triggers `.github/workflows/release.yml`,
-   which builds per-OS binaries and publishes the crate. Needs the
-   `CARGO_REGISTRY_TOKEN` repository secret.
+2. Publish a GitHub release for `v0.3.0`, with the 0.3.0 section of
+   CHANGELOG.md as its notes. Creating the release creates the tag, so there is
+   nothing to tag first. That fires `.github/workflows/release.yml`, which
+   builds the per-OS binaries, attaches them, and publishes the crate. Needs the
+   `CARGO_REGISTRY_TOKEN` repository secret. A draft release does not fire it;
+   publishing the draft later does.
 3. Confirm the Zenodo webhook minted a record for the tag, then put its DOI in:
    - `README.md` (citation block, marked with a `RELEASE:` comment)
    - `CITATION.cff` (`doi:` under `identifiers`)
