@@ -1,12 +1,25 @@
 name: Release
 
-# Tag a version (e.g. `git tag v0.1.0 && git push --tags`) to build and attach
-# per-OS binaries (dnoise CLI + dnoise-gui) to the GitHub release, and publish the
-# `dnoise` crate to crates.io. Manual runs build the same artifacts and upload them
-# as workflow artifacts only (no crates.io publish).
+# Tag a version (`git tag v0.3.0 && git push --tags`) and this is the only thing
+# that runs: it builds per-OS binaries (dnoise CLI + dnoise-gui), publishes the
+# GitHub release with them attached and the changelog section as its notes, and
+# then publishes the `dnoise` crate to crates.io. Manual runs build the same
+# artifacts and upload them as workflow artifacts only, releasing nothing.
 #
-# The publish job needs a crates.io API token stored as the repository secret
+# ONE release job does all the releasing, deliberately. The per-OS builds are a
+# matrix, and a matrix job cannot own the release: three runners calling the
+# create-release action at once race each other for the same tag. So the matrix
+# only ever uploads workflow artifacts, and a single job downloads them and does
+# every irreversible step in a fixed order.
+#
+# THAT ORDER MATTERS. The GitHub release is created first because it can be
+# deleted; `cargo publish` is last because it cannot be undone, only yanked. A
+# failure part-way therefore leaves a removable release rather than a permanent
+# crate version with nothing to go with it.
+#
+# Publishing needs a crates.io API token in the repository secret
 # CARGO_REGISTRY_TOKEN (cargo reads it from the environment automatically).
+# Zenodo mints its DOI from the published release, not from the bare tag.
 on:
   push:
     tags: ["v*"]
@@ -78,23 +91,66 @@ jobs:
           name: dnoise-${{ matrix.target_name }}
           path: dist/*
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-
-  publish-crate:
-    name: publish dnoise to crates.io
-    # Only on tag pushes, and only after the binaries build cleanly on all targets.
+  release:
+    name: publish the release and the crate
+    # Only on tag pushes, and only once every target has built and tested cleanly.
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Every matrix job's package, back in one place. Each uploaded its own
+      # named artifact containing a single archive; flatten them into dist/.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dnoise-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect the archives
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} dist/ \;
+          ls -l dist
+          # Three targets, three archives. Fewer means a matrix job produced
+          # nothing and the release would ship incomplete.
+          count=$(find dist -type f | wc -l)
+          if [ "$count" -ne 3 ]; then
+            echo "expected 3 archives, found $count" >&2
+            exit 1
+          fi
+
+      # The release notes are the changelog's own section for this tag, so the
+      # two cannot drift. Missing section is a hard failure: shipping a release
+      # whose notes are silently empty is worse than not shipping.
+      - name: Extract the changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no section for [$version]" >&2
+            exit 1
+          fi
+          cat notes.md
+
+      # Reversible step first: a release can be deleted, a crate version cannot.
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: notes.md
+          fail_on_unmatched_files: true
+
       - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
-      - name: Publish
+
+      # Irreversible step last, and only once the release above exists.
+      - name: Publish the crate
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo +1.97.1 publish --package dnoise --locked

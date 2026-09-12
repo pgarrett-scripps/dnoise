@@ -16,12 +16,20 @@ Denoised output is byte-identical to 0.1.0 for ddaPASEF on all three arms
 verified by running both builds over the benchmark acquisitions and comparing
 the stored frame data and metadata.
 
-**diaPASEF MS1 + MS/MS output changed.** The DIA window-grouping rework, which
-keeps static touching windows separate and groups continuous one-scan
-trajectories, filters fragments slightly harder: roughly 0.37% fewer MS/MS
-points are retained, across about half the MS/MS frames. MS1 is unaffected.
-Anyone reproducing published diaPASEF fragment-denoising numbers from 0.1.0
-should pin 0.1.0 or re-derive them.
+**diaPASEF MS1 + MS/MS output changed, because 0.1.0 was wrong here.**
+`filter_per_window` exists to filter fragments inside each isolation window
+separately, since neighbouring windows isolate unrelated precursor m/z bands.
+0.1.0's `read_dia_windows` coalesced any window whose `ScanNumBegin` was at or
+before the previous `ScanNumEnd`, and windows that merely touch satisfy that.
+Where a group's windows touch, they all merged into one interval and the filter
+ran over the whole frame, letting a fragment run span a quadrupole jump between
+unrelated m/z bands. 0.3.0 keeps static windows separate and merges only a
+genuine scanning ramp: consecutive one-scan steps of equal width moving
+monotonically in m/z. About 0.37% fewer MS/MS points are retained, across
+roughly half the MS/MS frames, and the points now removed are mostly noise runs
+that used to bridge a window boundary. MS1 is unaffected. Anyone reproducing
+published diaPASEF fragment-denoising numbers from 0.1.0 should pin 0.1.0 or
+re-derive them.
 
 ### Fixed
 - Write empty (0-peak) frames the long way, as a header plus a compressed
