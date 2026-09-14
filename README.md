@@ -82,7 +82,7 @@ without the CLI's dependencies:
 
 ```toml
 [dependencies]
-dnoise = { version = "0.1", default-features = false }
+dnoise = { version = "0.3", default-features = false }
 ```
 
 ```rust,no_run
