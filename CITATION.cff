@@ -39,6 +39,9 @@ authors:
       La Jolla, CA, USA
 identifiers:
   - type: doi
+    value: 10.5281/zenodo.22756840
+    description: Version-specific DOI for v0.3.0.
+  - type: doi
     value: 10.5281/zenodo.21959649
     description: Concept DOI for all versions, resolving to the latest release.
 repository-code: "https://github.com/pgarrett-scripps/dnoise"

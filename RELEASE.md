@@ -1,7 +1,16 @@
 # Releasing v0.3.0
 
-Status: **not released.** Everything below the line is done; everything above it
-is not. Nothing here has been tagged, published, or archived.
+Status: **released on 2026-09-14.** GitHub binaries, the crates.io package,
+and the Zenodo archive are published.
+
+- [GitHub v0.3.0](https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.3.0)
+  tags commit `f14fbc22f301f9600b93da62560bac6bbea19b04`.
+- [Zenodo v0.3.0](https://doi.org/10.5281/zenodo.22756840) is published; the
+  downloaded archive's checksum, source commit, version, and Windows fix were verified.
+- The all-version DOI remains `10.5281/zenodo.21959649`. The immutable v0.1.0
+  archive is `10.5281/zenodo.21959650`; use that record for the original paper results.
+- [crates.io v0.3.0](https://crates.io/crates/dnoise/0.3.0) was published by
+  [recovery run 34887161343](https://github.com/pgarrett-scripps/dnoise/actions/runs/34887161343).
 
 ## Still to do
 
@@ -11,21 +20,31 @@ is not. Nothing here has been tagged, published, or archived.
    availability statement and SI. Tracked in the paper repo's `TODO.md`, which
    has the ordered steps. This does not block the software release, only the
    claim that the paper and the release agree everywhere.
-2. Publish a GitHub release for `v0.3.0`, with the 0.3.0 section of
-   CHANGELOG.md as its notes. Creating the release creates the tag, so there is
-   nothing to tag first. That fires `.github/workflows/release.yml`, which
-   builds the per-OS binaries, attaches them, and publishes the crate. Needs the
-   `CARGO_REGISTRY_TOKEN` repository secret. A draft release does not fire it;
-   publishing the draft later does.
-3. Confirm the Zenodo webhook minted a record for the tag, then put its DOI in:
-   - `README.md` (citation block, marked with a `RELEASE:` comment)
-   - `CITATION.cff` (`doi:` under `identifiers`)
-   - the paper repo's `paper.typ` and `si-body.typ`, at the two
-     `FIXME(release)` comments
-4. Verify the published crate installs clean: `cargo install dnoise --version 0.3.0`.
 
 ## Done
 
+- Fixed Windows batch preflight, which queried an incomplete canonical drive
+  prefix. Added regression coverage for canonical paths and missing children.
+  All eight [CI checks](https://github.com/pgarrett-scripps/dnoise/actions/runs/34884608764)
+  passed, including formatting, Clippy, and workspace tests on Linux, macOS,
+  and Windows; MSRV, library-only, stable, dependency audit, and SDK-comparison checks.
+- Repeated local formatting, Clippy, and workspace tests successfully. The final
+  `cargo publish --dry-run --locked` verified 89 files (949.3 KiB uncompressed).
+- Published the GitHub release with the 0.3.0 changelog as its notes. Updated
+  `README.md` and `CITATION.cff` with the version-specific Zenodo DOI.
+- All three platform test/build jobs passed and the CLI/GUI archives are attached.
+  The downloaded Linux CLI reports `dnoise 0.3.0`; its archive SHA-256 matches
+  the digest on the published GitHub asset.
+- Installed the published crate with `cargo install dnoise --version 0.3.0 --locked`
+  into an isolated temporary directory; the installed command reports `dnoise 0.3.0`.
+- Fixed a packaging-workflow issue: downloaded binary archives in `dist/` made
+  Cargo reject the source checkout as dirty. Future releases stage downloads
+  outside the checkout. Published this crate from the unchanged v0.3.0 tag using
+  the recovery workflow, which checks the release downloads and package version.
+- Updated the local paper and SI release links, preserving the v0.1.0 benchmark
+  reference. The manuscript's existing unresolved diaPASEF rerun note blocks
+  `just paper`; `just verify` also reports existing declaration and stale-output
+  issues. These do not block the software release.
 - Version bumped to 0.3.0 in `Cargo.toml`, `dnoise-gui/Cargo.toml`, `CITATION.cff`
   (with `date-released`).
 - `CHANGELOG.md` has a dated 0.3.0 section; `[Unreleased]` is empty.
