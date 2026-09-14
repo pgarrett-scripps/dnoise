@@ -41,7 +41,7 @@ jobs:
           PY
           test -z "$(git status --porcelain)"
 
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish the crate from the release tag
