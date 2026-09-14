@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-09-11
+## [0.3.0] - 2026-09-14
 
 Adds prm-PASEF and the scanning diaPASEF variants, a streaming library API, and
 in-file provenance.
@@ -32,6 +32,8 @@ published diaPASEF fragment-denoising numbers from 0.1.0 should pin 0.1.0 or
 re-derive them.
 
 ### Fixed
+- Resolve canonical Windows paths without querying an incomplete drive prefix,
+  fixing batch manifests that failed with "Incorrect function".
 - Write empty (0-peak) frames the long way, as a header plus a compressed
   all-zero scan table, rather than the header-only 8-byte record. timsrust
   zstd-decodes whatever follows the header unconditionally and fails on an
@@ -188,5 +190,6 @@ First public release.
 - The SQLite `tdf` plumbing is now crate-private. The type-2 codec moved to the
   public `dnoise::codec` module (`dnoise::tdf::encode::*` → `dnoise::codec::*`).
 
-[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.3.0
 [0.1.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.1.0

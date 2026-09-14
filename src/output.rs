@@ -15,6 +15,10 @@ pub fn resolved_path(path: &Path) -> Result<PathBuf> {
     let mut result = PathBuf::new();
     for part in absolute.components() {
         match part {
+            // A Windows drive/UNC prefix is not a filesystem path on its own,
+            // especially the verbatim prefix returned by canonicalize(). Wait
+            // for RootDir before querying it.
+            Component::Prefix(prefix) => result.push(prefix.as_os_str()),
             Component::ParentDir => {
                 result.pop();
             }
@@ -186,6 +190,17 @@ mod tests {
         ] {
             assert!(check_disjoint(&input, &output).is_err());
         }
+    }
+    #[test]
+    fn resolves_canonical_paths_and_missing_children() {
+        let (_root, input, _) = setup();
+        let canonical = input.canonicalize().unwrap();
+        assert_eq!(resolved_path(&canonical).unwrap(), canonical);
+        assert_eq!(
+            resolved_path(&canonical.join("missing.d")).unwrap(),
+            canonical.join("missing.d")
+        );
+        assert!(check_disjoint(&input, &canonical.join("missing.d")).is_err());
     }
     #[test]
     fn failed_run_preserves_output_and_releases_lock() {
