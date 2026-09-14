@@ -1,0 +1,50 @@
+name: Publish existing release crate
+
+# Recover crate publication without moving an already archived release tag or
+# rebuilding its binaries. The selected release must already have all downloads.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published release tag to upload to crates.io (for example v0.3.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Verify the published release and package version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$RELEASE_TAG" --json isDraft,assets > "$RUNNER_TEMP/release.json"
+          python3 - <<'PY'
+          import json, os, pathlib, tomllib
+          release = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "release.json").read_text())
+          assert not release["isDraft"], "release must be published"
+          expected = {"dnoise-linux-x86_64.tar.gz", "dnoise-macos-arm64.tar.gz", "dnoise-windows-x86_64.zip"}
+          assert expected <= {a["name"] for a in release["assets"] if a["size"] > 0}, "release downloads are incomplete"
+          package = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]
+          assert package["name"] == "dnoise"
+          assert "v" + package["version"] == os.environ["RELEASE_TAG"], "tag and crate version differ"
+          PY
+          test -z "$(git status --porcelain)"
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish the crate from the release tag
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo +1.97.1 publish --package dnoise --locked

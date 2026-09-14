@@ -102,21 +102,22 @@ jobs:
       - uses: actions/checkout@v4
 
       # Every matrix job's package, back in one place. Each uploaded its own
-      # named artifact containing a single archive; flatten them into dist/.
+      # named artifact containing a single archive. Keep them outside the source
+      # checkout so cargo publish sees only committed package contents.
       - uses: actions/download-artifact@v4
         with:
           pattern: dnoise-*
-          path: artifacts
+          path: ${{ runner.temp }}/dnoise-artifacts
           merge-multiple: true
 
       - name: Collect the archives
         run: |
-          mkdir -p dist
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} dist/ \;
-          ls -l dist
+          mkdir -p "$RUNNER_TEMP/dnoise-dist"
+          find "$RUNNER_TEMP/dnoise-artifacts" -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} "$RUNNER_TEMP/dnoise-dist/" \;
+          ls -l "$RUNNER_TEMP/dnoise-dist"
           # Three targets, three archives. Fewer means a matrix job produced
           # nothing and the release would ship incomplete.
-          count=$(find dist -type f | wc -l)
+          count=$(find "$RUNNER_TEMP/dnoise-dist" -type f | wc -l)
           if [ "$count" -ne 3 ]; then
             echo "expected 3 archives, found $count" >&2
             exit 1
@@ -141,7 +142,7 @@ jobs:
       - name: Attach the binaries
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" "$RUNNER_TEMP/dnoise-dist"/* --clobber
 
       - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
