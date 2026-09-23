@@ -78,6 +78,8 @@ pub struct Config {
     pub ms1_polygon_im_pad: Option<f64>,
     pub ms1_polygon_overlap: Option<bool>,
     pub ms1_polygon_overlap_reach: Option<f64>,
+    /// `"calibrated"` (default) or `"linear"`.
+    pub mobility_scale: Option<crate::mobility::MobilityScale>,
     // Region-of-interest crop.
     pub mz_min: Option<f64>,
     pub mz_max: Option<f64>,
@@ -195,6 +197,8 @@ pub struct ResolvedConfig {
     pub dia_ms1: Option<DiaMs1WindowParams>,
     /// Resolved processing parameters.
     pub ms1_polygon: Option<Ms1PolygonParams>,
+    /// Resolved scan ↔ 1/K0 scale.
+    pub mobility_scale: crate::mobility::MobilityScale,
     /// Resolved processing option.
     pub crop: CropParams,
     /// Resolved processing option.
@@ -225,6 +229,7 @@ impl ResolvedConfig {
             dda_window: self.dda_window.as_ref(),
             dia_ms1: self.dia_ms1.as_ref(),
             ms1_polygon: self.ms1_polygon.as_ref(),
+            mobility_scale: self.mobility_scale,
         }
     }
 }
@@ -345,6 +350,7 @@ impl Config {
             dda_window,
             dia_ms1,
             ms1_polygon,
+            mobility_scale: self.mobility_scale.unwrap_or_default(),
             crop: CropParams {
                 mz_min: self.mz_min,
                 mz_max: self.mz_max,
@@ -393,6 +399,7 @@ impl Config {
             neighbor_max_rt_gap: Some(stages.neighbors.max_rt_gap_seconds),
             dia_per_window: Some(stages.dia_per_window),
             crop_only: Some(options.crop_only),
+            mobility_scale: Some(stages.mobility_scale),
             ..Self::default()
         };
         {

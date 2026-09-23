@@ -43,6 +43,7 @@ pub mod error;
 pub mod filter;
 pub mod frame;
 pub mod halo;
+pub mod mobility;
 pub mod msms;
 mod neighbor;
 pub mod overlap;
@@ -62,6 +63,7 @@ pub mod validation;
 
 // High-level pipeline.
 pub use error::{DecodeError, DnoiseError, Result};
+pub use mobility::MobilityScale;
 pub use params::{
     BoxCentroidParams, CropParams, DdaWindowParams, DiaMs1WindowParams, DiaWindowParams,
     FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams, NeighborParams, SmoothParams,

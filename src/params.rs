@@ -555,4 +555,8 @@ pub struct Stages<'a> {
     /// when the run stores no polygon.
     /// `None` disables it.
     pub ms1_polygon: Option<&'a Ms1PolygonParams>,
+    /// Scan ↔ 1/K0 scale for the two MS1 gates, their 1/K0 pads and reach, and
+    /// the mobility crop ([`crate::mobility`]). Defaults to Bruker's
+    /// acquisition calibration, the scale the polygon and windows are defined on.
+    pub mobility_scale: crate::mobility::MobilityScale,
 }

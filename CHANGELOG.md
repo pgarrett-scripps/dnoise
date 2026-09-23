@@ -26,6 +26,15 @@ ddaPASEF benchmark run the most intense MS1 frame keeps 37.6% of its points
 instead of 40.3%, and the MS1 area of the precursors the instrument selected
 for fragmentation is retained exactly as before.
 
+**The MS1 gates convert mobility on Bruker's calibrated scale.** Earlier
+versions turned scans into 1/K0 with timsrust's straight line between the
+acquisition-range bounds, but the selection polygon and the isolation windows
+are defined on the run's `TimsCalibration` scale, which differs by up to
+0.03 1/K0. The gates, their 1/K0 pads and reach, and the mobility crop now use
+that calibration (ported from koth and checked against the timsdata SDK). On the
+most intense MS1 frame of the 5-minute ddaPASEF run, 652 of 355,179 points
+(0.18%) change.
+
 The MS/MS isolation-window gate (`--dia-window`) is unchanged: outside a
 window's scans the quadrupole passes none of its precursors.
 
@@ -34,6 +43,9 @@ window's scans the quadrupole passes none of its precursors.
   / `--no-dia-ms1-overlap` to gate point by point.
 - `ms1_polygon_overlap_reach` / `dia_ms1_overlap_reach` (1/K0, default 0.1;
   0 = unlimited).
+- `mobility_scale` (`"calibrated"`, default, or `"linear"`) and
+  `--linear-mobility`; `dnoise::mobility` with the `TimsCalibration` ModelType 2
+  model. `Calibration::scan_to_im` follows the run's scale.
 
 ### Changed
 - `ms1_polygon_mz_pad`, `ms1_polygon_im_pad`, `dia_ms1_mz_pad` and

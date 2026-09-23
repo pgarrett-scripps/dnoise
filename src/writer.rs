@@ -10,6 +10,7 @@ use crate::error::{DnoiseError, Result};
 use crate::filter::filter_iterated;
 use crate::frame::FlatFrame;
 use crate::halo::horizontal_halo_keep_mask;
+use crate::mobility::{self, MobilityScale, ScanToMobility};
 use crate::msms::{MsmsKeep, build_msms_keep};
 use crate::neighbor::NeighborIndex;
 use crate::params::{
@@ -481,7 +482,7 @@ fn run<F: FnMut(Progress)>(
     // diaPASEF MS1 out-of-window gate: build the padded `(scan, TOF)` lookup once
     // from the isolation windows + calibration. `None` for ddaPASEF (no windows).
     let dia_ms1_gate = match dia_ms1.filter(|_| !crop_only) {
-        Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta)?,
+        Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta, stages.mobility_scale)?,
         None => None,
     };
     if dia_ms1.is_some() {
@@ -495,7 +496,7 @@ fn run<F: FnMut(Progress)>(
     // MS1 selection-polygon gate: build the per-scan TOF lookup once from the
     // run's IMS PolygonFilter + calibration. `None` when the run stores no polygon.
     let polygon_gate = match ms1_polygon.filter(|_| !crop_only) {
-        Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
+        Some(pp) => build_polygon_gate(&in_tdf, pp, &meta, stages.mobility_scale)?,
         None => None,
     };
     if ms1_polygon.is_some() {
@@ -523,11 +524,16 @@ fn run<F: FnMut(Progress)>(
             let md =
                 MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
             let num_scans = meta.iter().map(|m| m.num_scans).max().unwrap_or(0);
+            let im = if cp.im_min.is_some() || cp.im_max.is_some() {
+                mobility::load(&in_tdf, stages.mobility_scale, md.im_converter)?
+            } else {
+                ScanToMobility::Linear(md.im_converter)
+            };
             let g = CropGate::build(
                 cp,
                 num_scans,
                 |mz| md.mz_converter.invert(mz),
-                |k0| md.im_converter.invert(k0),
+                |k0| im.invert(k0),
             );
             info!(
                 point_crop = g.is_active(),
@@ -1215,6 +1221,7 @@ fn build_dia_ms1_gate(
     in_tdf: &Path,
     p: &DiaMs1WindowParams,
     meta: &[tdf::FrameMeta],
+    scale: MobilityScale,
 ) -> Result<Option<DiaMs1Gate>> {
     let boxes = tdf::read_dia_ms1_boxes(in_tdf)?;
     if boxes.is_empty() {
@@ -1231,6 +1238,7 @@ fn build_dia_ms1_gate(
     if num_scans == 0 {
         return Ok(None);
     }
+    let im = mobility::load(in_tdf, scale, md.im_converter)?;
 
     let tof_boxes: Vec<TofScanBox> = boxes
         .iter()
@@ -1243,10 +1251,10 @@ fn build_dia_ms1_gate(
 
             // Scan range -> 1/K0 (monotonic decreasing), padded by im_pad, back to
             // scans. Take min/max so the result is correct regardless of direction.
-            let im0 = md.im_converter.convert(b.scan_begin);
-            let im1 = md.im_converter.convert(b.scan_end);
-            let s0 = md.im_converter.invert(im0.max(im1) + p.im_pad);
-            let s1 = md.im_converter.invert(im0.min(im1) - p.im_pad);
+            let im0 = im.convert(b.scan_begin.into());
+            let im1 = im.convert(b.scan_end.into());
+            let s0 = im.invert(im0.max(im1) + p.im_pad);
+            let s1 = im.invert(im0.min(im1) - p.im_pad);
             let scan_lo = s0.min(s1).floor().max(0.0) as u32;
             let scan_hi = (s0.max(s1).ceil().max(0.0) as u32).min(num_scans as u32 - 1);
 
@@ -1261,7 +1269,7 @@ fn build_dia_ms1_gate(
 
     let reach = p
         .overlap
-        .then(|| reach_in_scans(p.overlap_reach, |s| md.im_converter.convert(s), num_scans));
+        .then(|| reach_in_scans(p.overlap_reach, |s| im.convert(s as f64), num_scans));
     Ok(DiaMs1Gate::build(&tof_boxes, num_scans).map(|mut g| {
         g.overlap = reach;
         g
@@ -1320,6 +1328,7 @@ fn build_polygon_gate(
     in_tdf: &Path,
     p: &Ms1PolygonParams,
     meta: &[tdf::FrameMeta],
+    scale: MobilityScale,
 ) -> Result<Option<PolygonGate>> {
     if !tdf::read_dia_windows(in_tdf)?.is_empty() {
         return Ok(None); // diaPASEF: the polygon property is multi-component here.
@@ -1338,14 +1347,15 @@ fn build_polygon_gate(
     if num_scans == 0 {
         return Ok(None);
     }
+    let k0 = mobility::load(in_tdf, scale, md.im_converter)?;
     let reach = p
         .overlap
-        .then(|| reach_in_scans(p.overlap_reach, |s| md.im_converter.convert(s), num_scans));
+        .then(|| reach_in_scans(p.overlap_reach, |s| k0.convert(s as f64), num_scans));
     Ok(PolygonGate::build(
         &mz,
         &im,
         num_scans,
-        |s| md.im_converter.convert(s),
+        |s| k0.convert(s as f64),
         |mz| md.mz_converter.invert(mz),
         p.mz_pad,
         p.im_pad,
@@ -1422,11 +1432,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 
 /// The run's `.d` calibration, exposed so an in-process caller can turn the
 /// integer `(scan, tof_idx)` of a [`DecodedFrame`]'s survivors into physical
-/// `(1/K0, m/z)` without re-opening the metadata. Thin wrapper over the same
-/// timsrust converters `dnoise` already reads internally.
+/// `(1/K0, m/z)` without re-opening the metadata. m/z uses timsrust's
+/// converter; 1/K0 uses the run's [`Stages::mobility_scale`] (Bruker's
+/// acquisition calibration by default, see [`crate::mobility`]).
 pub struct Calibration {
     tof2mz: timsrust::converters::Tof2MzConverter,
-    scan2im: timsrust::converters::Scan2ImConverter,
+    scan2im: ScanToMobility,
 }
 
 impl Calibration {
@@ -1545,11 +1556,11 @@ impl<'a> RunContext<'a> {
         };
 
         let dia_ms1_gate = match stages.dia_ms1 {
-            Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta)?,
+            Some(mp) => build_dia_ms1_gate(&in_tdf, mp, &meta, stages.mobility_scale)?,
             None => None,
         };
         let polygon_gate = match stages.ms1_polygon {
-            Some(pp) => build_polygon_gate(&in_tdf, pp, &meta)?,
+            Some(pp) => build_polygon_gate(&in_tdf, pp, &meta, stages.mobility_scale)?,
             None => None,
         };
 
@@ -1557,9 +1568,20 @@ impl<'a> RunContext<'a> {
         let rt_keep = vec![true; n_frames];
 
         let md = MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
+        // The accessor serves the run's scale; a multi-calibration run (which the
+        // gates refuse) keeps the linear scale here, as before 0.4.0.
+        let (_, im_segments) = tdf::count_calibration_segments(&in_tdf)?;
+        let scan2im = if im_segments > 1 {
+            warn!(
+                "run has {im_segments} mobility calibrations; Calibration::scan_to_im uses the linear scale"
+            );
+            ScanToMobility::Linear(md.im_converter)
+        } else {
+            mobility::load(&in_tdf, stages.mobility_scale, md.im_converter)?
+        };
         let calibration = Calibration {
             tof2mz: md.mz_converter,
-            scan2im: md.im_converter,
+            scan2im,
         };
 
         Ok(RunContext {

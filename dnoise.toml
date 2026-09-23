@@ -147,6 +147,12 @@ ms1_polygon_mz_pad = 0.0
 # (0.3.0: 0.05).
 ms1_polygon_im_pad = 0.0
 
+# Scan <-> 1/K0 scale for both MS1 gates (pads and reach) and the mobility crop.
+# "calibrated" uses the run's TimsCalibration, the scale Bruker defines the
+# polygon and isolation windows on. "linear" is timsrust's straight line between
+# the acquisition-range bounds (dnoise before 0.4.0; --linear-mobility).
+mobility_scale = "calibrated"
+
 # --- Experimental neighbor support (sum for filtering, preserve native output) ---
 # Previous/next compatible observations per side; all radii default to 0 (off).
 # MS1 also accepts the legacy frame_half_width key (do not set conflicting values).

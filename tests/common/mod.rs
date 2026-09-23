@@ -10,7 +10,10 @@ pub fn fixture(root: &Path, name: &str, dia: bool) -> PathBuf {
     db.execute_batch("CREATE TABLE GlobalMetadata (Key TEXT PRIMARY KEY, Value TEXT);
         CREATE TABLE Frames (Id INTEGER PRIMARY KEY, Time REAL, ScanMode INTEGER, MsMsType INTEGER, TimsId INTEGER,
           MaxIntensity INTEGER, SummedIntensities INTEGER, NumScans INTEGER, NumPeaks INTEGER, AccumulationTime REAL,
-          MzCalibration INTEGER, TimsCalibration INTEGER);").unwrap();
+          MzCalibration INTEGER, TimsCalibration INTEGER);
+        CREATE TABLE TimsCalibration (Id INTEGER PRIMARY KEY, ModelType INTEGER, C0 REAL, C1 REAL,
+          C2 REAL, C3 REAL, C4 REAL, C5 REAL, C6 REAL, C7 REAL, C8 REAL, C9 REAL);
+        INSERT INTO TimsCalibration VALUES (1, 2, 1, 15, 239.3, 103.0, 33.6, 1, -0.0266, 171.4, 16.8, 1732.7);").unwrap();
     for (key, value) in [
         ("TimsCompressionType", "2"),
         ("AcquisitionSoftware", "synthetic fixture"),

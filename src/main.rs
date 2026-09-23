@@ -261,6 +261,12 @@ struct Cli {
     #[arg(long)]
     ms1_polygon_overlap_reach: Option<f64>,
 
+    /// Convert mobility scans to 1/K0 with timsrust's straight line between the
+    /// acquisition-range bounds (dnoise before 0.4.0) instead of the run's
+    /// TimsCalibration, for the MS1 gates and the mobility crop.
+    #[arg(long)]
+    linear_mobility: bool,
+
     /// Filter MS/MS frames too. By default only MS1 frames are filtered (the
     /// vertical-IM filter is MS1-specific and strips most MS/MS fragment signal).
     #[arg(long)]
@@ -551,6 +557,9 @@ fn main() -> Result<()> {
     }
     if let Some(value) = cli.ms1_polygon_overlap_reach {
         cfg.ms1_polygon_overlap_reach = Some(value);
+    }
+    if cli.linear_mobility {
+        cfg.mobility_scale = Some(dnoise::MobilityScale::Linear);
     }
     if cli.dia_ms1_overlap {
         cfg.dia_ms1_overlap = Some(true);
