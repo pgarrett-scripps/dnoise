@@ -34,6 +34,10 @@ pub struct DiaMs1Gate {
     /// `per_scan[s]` = sorted, non-overlapping `[tof_lo, tof_hi]` intervals
     /// (inclusive) covered at mobility scan `s`. Empty rows keep nothing.
     per_scan: Vec<Vec<(u32, u32)>>,
+    /// Gate whole features by any overlap ([`crate::overlap`]) instead of points.
+    /// `Some(reach)` = on, with a feature allowed to extend `reach` scans beyond
+    /// its inside points (`u32::MAX` = unlimited); `None` = point by point.
+    pub overlap: Option<u32>,
 }
 
 impl DiaMs1Gate {
@@ -69,7 +73,10 @@ impl DiaMs1Gate {
             }
             *row = merged;
         }
-        Some(Self { per_scan })
+        Some(Self {
+            per_scan,
+            overlap: None,
+        })
     }
 
     /// True when the point lies inside some isolation window (and should be kept).

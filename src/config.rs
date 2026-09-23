@@ -70,10 +70,14 @@ pub struct Config {
     pub dia_ms1_window: Option<bool>,
     pub dia_ms1_mz_pad: Option<f64>,
     pub dia_ms1_im_pad: Option<f64>,
+    pub dia_ms1_overlap: Option<bool>,
+    pub dia_ms1_overlap_reach: Option<f64>,
     // MS1 selection-polygon gate.
     pub ms1_polygon: Option<bool>,
     pub ms1_polygon_mz_pad: Option<f64>,
     pub ms1_polygon_im_pad: Option<f64>,
+    pub ms1_polygon_overlap: Option<bool>,
+    pub ms1_polygon_overlap_reach: Option<f64>,
     // Region-of-interest crop.
     pub mz_min: Option<f64>,
     pub mz_max: Option<f64>,
@@ -306,12 +310,16 @@ impl Config {
         let dia_ms1 = DiaMs1WindowParams {
             mz_pad: self.dia_ms1_mz_pad.unwrap_or(d.mz_pad),
             im_pad: self.dia_ms1_im_pad.unwrap_or(d.im_pad),
+            overlap: self.dia_ms1_overlap.unwrap_or(d.overlap),
+            overlap_reach: self.dia_ms1_overlap_reach.unwrap_or(d.overlap_reach),
         };
         let dia_ms1 = self.dia_ms1_window.unwrap_or(true).then_some(dia_ms1);
         let d = Ms1PolygonParams::default();
         let ms1_polygon = Ms1PolygonParams {
             mz_pad: self.ms1_polygon_mz_pad.unwrap_or(d.mz_pad),
             im_pad: self.ms1_polygon_im_pad.unwrap_or(d.im_pad),
+            overlap: self.ms1_polygon_overlap.unwrap_or(d.overlap),
+            overlap_reach: self.ms1_polygon_overlap_reach.unwrap_or(d.overlap_reach),
         };
         let ms1_polygon = self.ms1_polygon.unwrap_or(true).then_some(ms1_polygon);
         let mut filter = filter;
@@ -443,11 +451,15 @@ impl Config {
         if let Some(p) = stages.dia_ms1 {
             c.dia_ms1_mz_pad = Some(p.mz_pad);
             c.dia_ms1_im_pad = Some(p.im_pad);
+            c.dia_ms1_overlap = Some(p.overlap);
+            c.dia_ms1_overlap_reach = Some(p.overlap_reach);
         }
         c.ms1_polygon = Some(stages.ms1_polygon.is_some());
         if let Some(p) = stages.ms1_polygon {
             c.ms1_polygon_mz_pad = Some(p.mz_pad);
             c.ms1_polygon_im_pad = Some(p.im_pad);
+            c.ms1_polygon_overlap = Some(p.overlap);
+            c.ms1_polygon_overlap_reach = Some(p.overlap_reach);
         }
         if let Some(crop) = options.crop {
             c.mz_min = crop.mz_min;

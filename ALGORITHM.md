@@ -24,8 +24,9 @@ The CLI defaults used in the benchmark are:
 1. Filter MS1 frames with the iterative ion-mobility streak filter.
 2. Apply the m/z-halo filter to the surviving MS1 points.
 3. Apply the acquisition-appropriate MS1 gate when its geometry is present:
-   the PASEF selection polygon for ddaPASEF, or the union of padded isolation
-   windows for diaPASEF.
+   the PASEF selection polygon for ddaPASEF, or the union of isolation
+   windows for diaPASEF. The gate keeps a whole streak-filter feature when any
+   of its points lies inside, up to 0.1 1/K0 beyond its inside points.
 4. Copy MS/MS frames unchanged.
 5. Encode every frame in its original order and update the database metadata.
 
@@ -91,10 +92,10 @@ See [targeted support](docs/targeted.md) for the current validation scope.
 
 The gates use acquisition geometry already stored in `analysis.tdf`:
 
-- **ddaPASEF/PASEF MS1:** the padded IMS selection polygon removes survey
-  points from precursor space the method never selects.
-- **diaPASEF MS1:** the padded union of DIA isolation windows removes survey
-  points from precursor space the method never fragments.
+- **ddaPASEF/PASEF MS1:** the IMS selection polygon removes survey features
+  lying wholly in precursor space the method never selects.
+- **diaPASEF MS1:** the union of DIA isolation windows removes survey
+  features lying wholly in precursor space the method never fragments.
 - **diaPASEF MS/MS:** when fragment frames are filtered, an isolation-window
   gate removes out-of-window scans and per-window filtering is enabled by
   default so unrelated windows are not linked.

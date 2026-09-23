@@ -184,13 +184,21 @@ pub struct DiaMs1WindowParams {
     pub mz_pad: f64,
     /// Ion-mobility leniency added to each side of every window, in **1/K0**.
     pub im_pad: f64,
+    /// Keep a whole MS1 feature when any of its points lies inside a (padded)
+    /// window, instead of gating point by point ([`crate::overlap`]).
+    pub overlap: bool,
+    /// Overlap mode: how far, in **1/K0**, a kept feature may extend beyond the
+    /// mobility range of its inside points. `0.0` = unlimited.
+    pub overlap_reach: f64,
 }
 
 impl Default for DiaMs1WindowParams {
     fn default() -> Self {
         Self {
-            mz_pad: 5.0,
-            im_pad: 0.05,
+            mz_pad: 0.0,
+            im_pad: 0.0,
+            overlap: true,
+            overlap_reach: 0.1,
         }
     }
 }
@@ -202,8 +210,8 @@ impl Default for DiaMs1WindowParams {
 /// a precursor and can be dropped from the survey scans. The polygon itself comes
 /// from the data; the pads add physical-unit leniency so a precursor near an edge
 /// keeps its isotopic envelope (m/z) and mobility spread (1/K0). Defaults match
-/// [`DiaMs1WindowParams`]; set both pads to `0.0` to reproduce the literal
-/// polygon.
+/// [`DiaMs1WindowParams`]: no pads, feature-level gating with a 0.1 1/K0 reach.
+/// `overlap = false` with `mz_pad = 5.0`, `im_pad = 0.05` reproduces 0.3.0.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Ms1PolygonParams {
     /// m/z leniency added to each side of the polygon interior, in **Daltons**
@@ -211,13 +219,21 @@ pub struct Ms1PolygonParams {
     pub mz_pad: f64,
     /// Ion-mobility leniency added to each side, in **1/K0**.
     pub im_pad: f64,
+    /// Keep a whole MS1 feature when any of its points lies inside the (padded)
+    /// polygon, instead of gating point by point ([`crate::overlap`]).
+    pub overlap: bool,
+    /// Overlap mode: how far, in **1/K0**, a kept feature may extend beyond the
+    /// mobility range of its inside points. `0.0` = unlimited.
+    pub overlap_reach: f64,
 }
 
 impl Default for Ms1PolygonParams {
     fn default() -> Self {
         Self {
-            mz_pad: 5.0,
-            im_pad: 0.05,
+            mz_pad: 0.0,
+            im_pad: 0.0,
+            overlap: true,
+            overlap_reach: 0.1,
         }
     }
 }
@@ -346,20 +362,24 @@ mod tests {
     }
 
     #[test]
-    fn dia_ms1_defaults_are_physical_pads() {
+    fn dia_ms1_defaults_gate_features_without_pads() {
         let d = DiaMs1WindowParams::default();
-        assert_eq!(d.mz_pad, 5.0);
-        assert_eq!(d.im_pad, 0.05);
+        assert_eq!(d.mz_pad, 0.0);
+        assert_eq!(d.im_pad, 0.0);
+        assert!(d.overlap);
+        assert_eq!(d.overlap_reach, 0.1);
     }
 
     #[test]
-    fn polygon_pad_defaults_match_dia_ms1() {
-        // The polygon gate is the ddaPASEF twin of the DIA MS1 gate; its pads
-        // default to the same physical leniency.
+    fn polygon_gate_defaults_match_dia_ms1() {
+        // The polygon gate is the ddaPASEF twin of the DIA MS1 gate; it defaults
+        // to the same feature-level gating.
         let p = Ms1PolygonParams::default();
         let d = DiaMs1WindowParams::default();
         assert_eq!(p.mz_pad, d.mz_pad);
         assert_eq!(p.im_pad, d.im_pad);
+        assert_eq!(p.overlap, d.overlap);
+        assert_eq!(p.overlap_reach, d.overlap_reach);
     }
 
     #[test]

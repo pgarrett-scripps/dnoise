@@ -217,6 +217,18 @@ struct Cli {
     /// diaPASEF MS1 gate: ion-mobility leniency added to each side, in 1/K0.
     #[arg(long)]
     dia_ms1_im_pad: Option<f64>,
+    /// diaPASEF MS1 gate: keep a whole MS1 feature when any of its points lies
+    /// inside a window, instead of cutting it at the window edge. On by default;
+    /// passing this flag explicitly is a harmless no-op.
+    #[arg(long)]
+    dia_ms1_overlap: bool,
+    /// diaPASEF MS1 gate: gate point by point instead of by feature (0.3.0).
+    #[arg(long)]
+    no_dia_ms1_overlap: bool,
+    /// diaPASEF MS1 gate, overlap mode: how far a kept feature may extend beyond
+    /// the mobility range of its inside points, in 1/K0 (0 = unlimited).
+    #[arg(long)]
+    dia_ms1_overlap_reach: Option<f64>,
 
     /// Drop MS1 points outside the run's ddaPASEF/PASEF selection polygon (the IMS
     /// PolygonFilter stored in analysis.tdf) — signal in never-selected precursor
@@ -236,6 +248,18 @@ struct Cli {
     /// MS1 polygon gate: ion-mobility leniency added to each side, in 1/K0.
     #[arg(long)]
     ms1_polygon_im_pad: Option<f64>,
+    /// MS1 polygon gate: keep a whole MS1 feature when any of its points lies
+    /// inside the polygon, instead of cutting it at the polygon edge. On by
+    /// default; passing this flag explicitly is a harmless no-op.
+    #[arg(long)]
+    ms1_polygon_overlap: bool,
+    /// MS1 polygon gate: gate point by point instead of by feature (0.3.0).
+    #[arg(long)]
+    no_ms1_polygon_overlap: bool,
+    /// MS1 polygon gate, overlap mode: how far a kept feature may extend beyond
+    /// the mobility range of its inside points, in 1/K0 (0 = unlimited).
+    #[arg(long)]
+    ms1_polygon_overlap_reach: Option<f64>,
 
     /// Filter MS/MS frames too. By default only MS1 frames are filtered (the
     /// vertical-IM filter is MS1-specific and strips most MS/MS fragment signal).
@@ -518,6 +542,24 @@ fn main() -> Result<()> {
     }
     if let Some(value) = cli.ms1_polygon_im_pad {
         cfg.ms1_polygon_im_pad = Some(value);
+    }
+    if cli.ms1_polygon_overlap {
+        cfg.ms1_polygon_overlap = Some(true);
+    }
+    if cli.no_ms1_polygon_overlap {
+        cfg.ms1_polygon_overlap = Some(false);
+    }
+    if let Some(value) = cli.ms1_polygon_overlap_reach {
+        cfg.ms1_polygon_overlap_reach = Some(value);
+    }
+    if cli.dia_ms1_overlap {
+        cfg.dia_ms1_overlap = Some(true);
+    }
+    if cli.no_dia_ms1_overlap {
+        cfg.dia_ms1_overlap = Some(false);
+    }
+    if let Some(value) = cli.dia_ms1_overlap_reach {
+        cfg.dia_ms1_overlap_reach = Some(value);
     }
     if let Some(value) = cli.mz_min {
         cfg.mz_min = Some(value);

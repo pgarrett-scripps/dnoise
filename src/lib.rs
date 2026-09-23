@@ -45,6 +45,7 @@ pub mod frame;
 pub mod halo;
 pub mod msms;
 mod neighbor;
+pub mod overlap;
 pub mod params;
 pub mod polygon;
 pub mod smooth;

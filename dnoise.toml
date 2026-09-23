@@ -108,15 +108,21 @@ dda_window_scan_pad = 0
 # way with --dia-per-window / --no-dia-per-window.
 # dia_per_window = <conditional, see above>
 # Drop MS1 points whose (m/z, mobility) falls outside every isolation window, i.e.
-# precursors the method never fragments. Windows are padded in physical units (Da
-# and 1/K0) so an edge precursor keeps its full isotopic envelope. No effect on
+# precursors the method never fragments. The gate is applied per feature: a
+# streak-filter feature is kept whole when any of its points lies in a window, so
+# an edge precursor keeps its mobility spread without a fixed pad. No effect on
 # ddaPASEF. On by default. Set dia_ms1_window = false (or --no-dia-ms1-window) to
 # disable.
 dia_ms1_window = true
-# m/z leniency added to each side of every window, in Daltons.
-dia_ms1_mz_pad = 5.0
-# Ion-mobility leniency added to each side of every window, in 1/K0.
-dia_ms1_im_pad = 0.05
+# Feature-level gating (true) or point-by-point (false, the 0.3.0 behavior).
+dia_ms1_overlap = true
+# How far a kept feature may extend beyond the mobility range of its inside
+# points, in 1/K0. 0 = unlimited.
+dia_ms1_overlap_reach = 0.1
+# m/z leniency added to each side of every window, in Daltons (0.3.0: 5.0).
+dia_ms1_mz_pad = 0.0
+# Ion-mobility leniency added to each side of every window, in 1/K0 (0.3.0: 0.05).
+dia_ms1_im_pad = 0.0
 
 # --- MS1 selection-polygon gate (ddaPASEF/PASEF) ---
 # Drop MS1 points outside the run's instrument selection polygon (the IMS
@@ -128,13 +134,18 @@ dia_ms1_im_pad = 0.05
 # run stores no polygon or defines a diaPASEF window scheme. Set ms1_polygon =
 # false (or --no-ms1-polygon) to disable.
 ms1_polygon = true
-# m/z leniency added to each side of the polygon, in Daltons (keeps an edge
-# precursor's isotopic envelope). 0 = literal polygon. Default matches the
-# diaPASEF MS1 gate's dia_ms1_mz_pad.
-ms1_polygon_mz_pad = 5.0
-# Ion-mobility leniency added to each side, in 1/K0. 0 = literal polygon.
-# Default matches dia_ms1_im_pad.
-ms1_polygon_im_pad = 0.05
+# Feature-level gating: keep a whole streak-filter feature when any of its points
+# lies inside the polygon (false = point by point, the 0.3.0 behavior).
+ms1_polygon_overlap = true
+# How far a kept feature may extend beyond the mobility range of its inside
+# points, in 1/K0. 0 = unlimited.
+ms1_polygon_overlap_reach = 0.1
+# m/z leniency added to each side of the polygon, in Daltons. 0 = literal
+# polygon (0.3.0: 5.0).
+ms1_polygon_mz_pad = 0.0
+# Ion-mobility leniency added to each side, in 1/K0. 0 = literal polygon
+# (0.3.0: 0.05).
+ms1_polygon_im_pad = 0.0
 
 # --- Experimental neighbor support (sum for filtering, preserve native output) ---
 # Previous/next compatible observations per side; all radii default to 0 (off).

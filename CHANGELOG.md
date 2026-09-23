@@ -6,6 +6,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - unreleased
+
+The MS1 acquisition gates decide per feature instead of per point, and their
+fixed pads are gone.
+
+**Default MS1 output changes on ddaPASEF and diaPASEF.** 0.3.0 kept an MS1 point
+only if it fell inside the selection polygon (ddaPASEF) or an isolation window
+(diaPASEF), each widened by 5 Da and 0.05 1/K0. The pads were there so an edge
+precursor kept its isotopes and mobility spread, but they also let back in
+everything else lying near the edge, including a strip of the singly charged
+band. 0.4.0 groups the points that survived the streak and m/z-halo filters into
+features, using the streak filter's own adjacency, and keeps a feature whole when
+any of its points lies inside the gate. A kept feature may extend at most 0.1 1/K0
+beyond the mobility range of its inside points, so a long constant-m/z line
+that clips the gate is not carried across the whole mobility range; bright
+precursor features in the benchmark runs span under 0.1 1/K0. On a 5-minute
+ddaPASEF benchmark run the most intense MS1 frame keeps 37.6% of its points
+instead of 40.3%, and the MS1 area of the precursors the instrument selected
+for fragmentation is retained exactly as before.
+
+The MS/MS isolation-window gate (`--dia-window`) is unchanged: outside a
+window's scans the quadrupole passes none of its precursors.
+
+### Added
+- `ms1_polygon_overlap` / `dia_ms1_overlap` (on) and `--no-ms1-polygon-overlap`
+  / `--no-dia-ms1-overlap` to gate point by point.
+- `ms1_polygon_overlap_reach` / `dia_ms1_overlap_reach` (1/K0, default 0.1;
+  0 = unlimited).
+
+### Changed
+- `ms1_polygon_mz_pad`, `ms1_polygon_im_pad`, `dia_ms1_mz_pad` and
+  `dia_ms1_im_pad` default to 0 (were 5 Da and 0.05 1/K0). To reproduce 0.3.0,
+  pass `--no-ms1-polygon-overlap --ms1-polygon-mz-pad 5 --ms1-polygon-im-pad 0.05`
+  (and the `dia-ms1` equivalents).
+
 ## [0.3.0] - 2026-09-14
 
 Adds prm-PASEF and the scanning diaPASEF variants, a streaming library API, and

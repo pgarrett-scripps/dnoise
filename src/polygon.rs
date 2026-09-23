@@ -21,6 +21,10 @@ pub struct PolygonGate {
     /// (inclusive) of the polygon interior at mobility scan `s`. Empty rows keep
     /// nothing (the polygon does not cover that mobility).
     per_scan: Vec<Vec<(u32, u32)>>,
+    /// Gate whole features by any overlap ([`crate::overlap`]) instead of points.
+    /// `Some(reach)` = on, with a feature allowed to extend `reach` scans beyond
+    /// its inside points (`u32::MAX` = unlimited); `None` = point by point.
+    pub overlap: Option<u32>,
 }
 
 impl PolygonGate {
@@ -104,7 +108,10 @@ impl PolygonGate {
         if per_scan.iter().all(|row| row.is_empty()) {
             return None;
         }
-        Some(Self { per_scan })
+        Some(Self {
+            per_scan,
+            overlap: None,
+        })
     }
 
     /// True when the point lies inside the polygon (and should be kept).
