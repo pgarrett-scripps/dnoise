@@ -93,8 +93,8 @@ pub fn extend_to_features(
             }
         }
         // Later scans within the gap.
-        for sj in si + 1..starts.len() {
-            if starts[sj].0 - s > scan_gap {
+        for (sj, &(s2, _)) in starts.iter().enumerate().skip(si + 1) {
+            if s2 - s > scan_gap {
                 break;
             }
             let (lo2, hi2) = run_of(sj);

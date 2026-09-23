@@ -1276,7 +1276,7 @@ fn reach_in_scans(reach: f64, im_at_scan: impl Fn(u32) -> f64, num_scans: usize)
     }
     let last = num_scans.saturating_sub(1).max(1) as u32;
     let per_scan = (im_at_scan(0) - im_at_scan(last)).abs() / f64::from(last);
-    if !(per_scan > 0.0) {
+    if per_scan.is_nan() || per_scan <= 0.0 {
         return u32::MAX;
     }
     (reach / per_scan).ceil().min(f64::from(u32::MAX - 1)) as u32
