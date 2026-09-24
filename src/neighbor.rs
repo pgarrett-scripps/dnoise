@@ -3,12 +3,12 @@
 use crate::msms::combine_and_filter;
 use crate::provenance::NeighborUsage;
 use crate::tdf::FrameMeta;
+use crate::tsr::FrameReader;
 use crate::{Acquisition, DnoiseError, FilterParams, FlatFrame, HaloParams, Result, Stages};
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use timsrust::readers::FrameReader;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Atom {

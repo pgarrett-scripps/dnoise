@@ -17,9 +17,9 @@ use crate::frame::FlatFrame;
 use crate::halo::horizontal_halo_keep_mask;
 use crate::params::{FilterParams, HaloParams, MsmsFilterParams};
 use crate::tdf::{FrameMeta, PasefWindow};
+use crate::tsr::FrameReader;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use timsrust::readers::FrameReader;
 
 /// Pack an absolute `(scan, tof)` into a single key.
 #[inline]

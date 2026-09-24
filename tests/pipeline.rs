@@ -133,8 +133,8 @@ fn dda_and_dia_outputs_validate_preserve_msms_and_match_streaming() {
             stats.kept_points
         );
         let context = dnoise::RunContext::open(&input, &resolved.filter, &stages).unwrap();
-        let reader = timsrust::readers::FrameReader::new(&output).unwrap();
-        let raw = timsrust::readers::FrameReader::new(&input).unwrap();
+        let reader = dnoise::tsr::FrameReader::new(&output).unwrap();
+        let raw = dnoise::tsr::FrameReader::new(&input).unwrap();
         for i in 0..3 {
             let expected = context.process(i).unwrap().survivors;
             let actual = dnoise::FlatFrame::from_frame(&reader.get(i).unwrap());

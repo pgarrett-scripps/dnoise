@@ -14,10 +14,10 @@ use dnoise::FilterParams;
 use dnoise::codec::encode_frame_type2;
 use dnoise::filter::filter_iterated;
 use dnoise::frame::FlatFrame;
+use dnoise::tsr::FrameReader;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::time::Instant;
-use timsrust::readers::FrameReader;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);

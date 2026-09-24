@@ -10,11 +10,11 @@
 
 use dnoise::codec::decode_frame_type2;
 use dnoise::frame::FlatFrame;
+use dnoise::tsr::FrameReader;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use timsrust::readers::FrameReader;
 
 fn canonical(mut v: Vec<(u32, u32, u32)>) -> Vec<(u32, u32, u32)> {
     v.sort_unstable_by_key(|&(s, t, _)| (s, t));

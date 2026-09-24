@@ -2,7 +2,7 @@
 
 /// A frame expanded into three parallel per-point arrays plus its scan count.
 ///
-/// `timsrust::Frame` stores points in CSR form (`scan_offsets` is a row pointer
+/// `crate::tsr::Frame` stores points in CSR form (`scan_offsets` is a row pointer
 /// into `tof_indices` / `intensities`). The filter works on flat per-point
 /// arrays, so we expand once on load and regroup once before encoding.
 #[derive(Debug, Clone)]
@@ -20,8 +20,8 @@ pub struct FlatFrame {
 }
 
 impl FlatFrame {
-    /// Expand a `timsrust::Frame` into flat per-point arrays.
-    pub fn from_frame(frame: &timsrust::Frame) -> Self {
+    /// Expand a `crate::tsr::Frame` into flat per-point arrays.
+    pub fn from_frame(frame: &crate::tsr::Frame) -> Self {
         let num_scans = frame.scan_offsets.len().saturating_sub(1);
         let n = frame.tof_indices.len();
         let mut scan = Vec::with_capacity(n);
@@ -101,7 +101,7 @@ mod tests {
     fn from_frame_expands_csr_offsets_into_per_point_scans() {
         // `scan_offsets` is a CSR row pointer over 3 scans: scan 0 has two points,
         // scan 1 has none, scan 2 has one.
-        let src = timsrust::Frame {
+        let src = crate::tsr::Frame {
             scan_offsets: vec![0, 2, 2, 3],
             tof_indices: vec![10, 11, 12],
             intensities: vec![100, 101, 102],
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn from_frame_handles_an_empty_frame() {
-        let src = timsrust::Frame {
+        let src = crate::tsr::Frame {
             scan_offsets: vec![0, 0, 0],
             ..Default::default()
         };

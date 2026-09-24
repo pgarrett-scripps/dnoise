@@ -28,8 +28,8 @@
 
 use std::path::Path;
 
+use crate::tsr::{ConvertableDomain, Scan2ImConverter};
 use serde::{Deserialize, Serialize};
-use timsrust::converters::{ConvertableDomain, Scan2ImConverter};
 
 use crate::error::{DnoiseError, Result};
 

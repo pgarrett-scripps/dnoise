@@ -44,9 +44,14 @@ required-features = ["cli"]
 [dependencies]
 # Library dependencies.
 rayon = "1.12.0"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.35", features = ["bundled"] }
 thiserror = "2.0.18"
-timsrust = { version = "0.4.2" }
+# Only the TDF reader sub-crate: the `timsrust` facade adds the centroid,
+# miniTDF, TSF and parquet-spectra readers dnoise does not use. Note that
+# timsrust-core's `io` feature (required by timsrust-tdf) enables
+# `filemanager` with its default features, so the object_store/tokio stack is
+# still linked; no feature combination avoids that in 0.6.6.
+timsrust-tdf = { version = "0.6.6", default-features = false }
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
 # unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.

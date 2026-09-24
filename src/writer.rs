@@ -21,14 +21,14 @@ use crate::polygon::PolygonGate;
 use crate::provenance::NeighborUsage;
 use crate::smooth::box_average;
 use crate::tdf::{self, DiaWindows, FrameUpdate, PrmWindows};
+use crate::tsr::ConvertableDomain;
+use crate::tsr::{FrameReader, MetadataReader};
 use crate::watershed::watershed_centroid;
 use rayon::prelude::*;
 use std::fs;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use timsrust::converters::ConvertableDomain;
-use timsrust::readers::{FrameReader, MetadataReader};
 use tracing::{debug, info, warn};
 
 /// Frames are read+filtered+encoded in parallel batches of this size, then the
@@ -1459,7 +1459,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 /// converter; 1/K0 uses the run's [`Stages::mobility_scale`] (Bruker's
 /// acquisition calibration by default, see [`crate::mobility`]).
 pub struct Calibration {
-    tof2mz: timsrust::converters::Tof2MzConverter,
+    tof2mz: crate::tsr::Tof2MzConverter,
     scan2im: ScanToMobility,
 }
 

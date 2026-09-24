@@ -17,8 +17,8 @@
 use std::path::PathBuf;
 
 use dnoise::frame::FlatFrame;
+use dnoise::tsr::FrameReader;
 use dnoise::{FilterParams, RunContext, Stages, denoise};
-use timsrust::readers::FrameReader;
 
 /// Sort a survivor set into a canonical order for comparison (the encoder groups
 /// by scan and sorts by TOF, so raw order is not meaningful).

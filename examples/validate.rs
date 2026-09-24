@@ -6,9 +6,9 @@
 //!
 //! Usage: cargo run --example validate -- <PATH.d>
 
+use dnoise::tsr::FrameReader;
 use rusqlite::Connection;
 use std::path::PathBuf;
-use timsrust::readers::FrameReader;
 
 fn main() -> anyhow::Result<()> {
     let path: PathBuf = std::env::args()

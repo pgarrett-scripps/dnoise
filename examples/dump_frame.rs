@@ -6,10 +6,10 @@
 //! `frame_index0` is the 0-based timsrust frame index (= Frames.Id - 1).
 
 use dnoise::frame::FlatFrame;
+use dnoise::tsr::ConvertableDomain;
+use dnoise::tsr::{FrameReader, MetadataReader};
 use std::io::Write;
 use std::path::PathBuf;
-use timsrust::converters::ConvertableDomain;
-use timsrust::readers::{FrameReader, MetadataReader};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);

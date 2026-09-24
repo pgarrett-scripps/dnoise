@@ -50,6 +50,7 @@ pub mod overlap;
 pub mod params;
 pub mod polygon;
 pub mod smooth;
+pub mod tsr;
 pub mod watershed;
 pub mod writer;
 
@@ -78,9 +79,9 @@ pub use writer::{
 // Low-level building blocks.
 pub use crop::CropGate;
 
+use crate::tsr::ConvertableDomain;
+use crate::tsr::MetadataReader;
 use std::path::Path;
-use timsrust::converters::ConvertableDomain;
-use timsrust::readers::MetadataReader;
 
 /// Acquisition scheme of a `.d` run, detected from frame types and checked PRM events.
 /// Drives the `--preset auto` gate selection (see the CLI): ddaPASEF wants the MS1

@@ -28,13 +28,13 @@
 //! Output columns: precursor_id, mz, charge, scan, parent_frame, instrument_intensity,
 //! area_original, area_denoised, points_original, points_denoised.
 
+use dnoise::tsr::ConvertableDomain;
+use dnoise::tsr::{FrameReader, MetadataReader};
 use rayon::prelude::*;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use timsrust::converters::ConvertableDomain;
-use timsrust::readers::{FrameReader, MetadataReader};
 
 const ISOTOPE_SPACING: f64 = 1.003_355;
 
@@ -97,7 +97,7 @@ struct Window {
     scan_hi: usize,
 }
 
-fn windows(precursors: &[Precursor], meta: &timsrust::Metadata, o: &Opts) -> Vec<Window> {
+fn windows(precursors: &[Precursor], meta: &dnoise::tsr::Metadata, o: &Opts) -> Vec<Window> {
     precursors
         .iter()
         .map(|p| {
@@ -121,7 +121,11 @@ fn windows(precursors: &[Precursor], meta: &timsrust::Metadata, o: &Opts) -> Vec
 
 /// Sum every point of `frame` that falls in a precursor's window, for each
 /// precursor listed against this frame. Returns (precursor index, area, points).
-fn integrate(frame: &timsrust::Frame, wanted: &[usize], win: &[Window]) -> Vec<(usize, f64, u64)> {
+fn integrate(
+    frame: &dnoise::tsr::Frame,
+    wanted: &[usize],
+    win: &[Window],
+) -> Vec<(usize, f64, u64)> {
     let n_scans = frame.scan_offsets.len().saturating_sub(1);
     wanted
         .iter()
