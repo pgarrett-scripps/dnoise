@@ -106,7 +106,6 @@ mod tests {
             tof_indices: vec![10, 11, 12],
             intensities: vec![100, 101, 102],
             index: 7,
-            ..Default::default()
         };
         let flat = FlatFrame::from_frame(&src);
         assert_eq!(flat.frame_id, 7);
