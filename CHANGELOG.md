@@ -35,6 +35,13 @@ that calibration (ported from koth and checked against the timsdata SDK). On the
 most intense MS1 frame of the 5-minute ddaPASEF run, 652 of 355,179 points
 (0.18%) change.
 
+The diaPASEF MS1 window gate now covers exactly a window's
+`[ScanNumBegin, ScanNumEnd)` scans when `dia_ms1_im_pad` is 0. Before, the end
+scan was included and float noise in the scan -> 1/K0 -> scan round trip could
+add a scan at either edge. `Calibration::scan_to_im` falls back to the linear
+scale with a warning when a run's calibration cannot be read; the gates still
+refuse such a run.
+
 The MS/MS isolation-window gate (`--dia-window`) is unchanged: outside a
 window's scans the quadrupole passes none of its precursors.
 

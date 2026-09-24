@@ -1249,14 +1249,8 @@ fn build_dia_ms1_gate(
             let tof_lo = t0.min(t1).floor().max(0.0) as u32;
             let tof_hi = t1.max(t0).ceil().max(0.0) as u32;
 
-            // Scan range -> 1/K0 (monotonic decreasing), padded by im_pad, back to
-            // scans. Take min/max so the result is correct regardless of direction.
-            let im0 = im.convert(b.scan_begin.into());
-            let im1 = im.convert(b.scan_end.into());
-            let s0 = im.invert(im0.max(im1) + p.im_pad);
-            let s1 = im.invert(im0.min(im1) - p.im_pad);
-            let scan_lo = s0.min(s1).floor().max(0.0) as u32;
-            let scan_hi = (s0.max(s1).ceil().max(0.0) as u32).min(num_scans as u32 - 1);
+            let (scan_lo, scan_hi) =
+                window_scans(b.scan_begin, b.scan_end, p.im_pad, &im, num_scans);
 
             TofScanBox {
                 scan_lo,
@@ -1274,6 +1268,34 @@ fn build_dia_ms1_gate(
         g.overlap = reach;
         g
     }))
+}
+
+/// Inclusive scan range of a `[scan_begin, scan_end)` isolation window, padded by
+/// `im_pad` in 1/K0. With no pad the window's own scans are returned exactly;
+/// otherwise the edges go scan -> 1/K0 -> padded -> scan, taking min/max so the
+/// result is right for either conversion direction. The rounding tolerance keeps
+/// float noise in the round trip from adding a scan at either edge.
+fn window_scans(
+    scan_begin: u32,
+    scan_end: u32,
+    im_pad: f64,
+    im: &ScanToMobility,
+    num_scans: usize,
+) -> (u32, u32) {
+    const EPS: f64 = 1e-3; // scans: far above round-trip noise, far below one scan
+    let last = num_scans.saturating_sub(1) as u32;
+    let first_in = scan_begin;
+    let last_in = scan_end.saturating_sub(1).max(scan_begin);
+    if im_pad <= 0.0 {
+        return (first_in.min(last), last_in.min(last));
+    }
+    let im0 = im.convert(first_in.into());
+    let im1 = im.convert(last_in.into());
+    let s0 = im.invert(im0.max(im1) + im_pad);
+    let s1 = im.invert(im0.min(im1) - im_pad);
+    let lo = (s0.min(s1) + EPS).floor().max(0.0) as u32;
+    let hi = ((s0.max(s1) - EPS).ceil().max(0.0) as u32).min(last);
+    (lo.min(hi), hi)
 }
 
 /// Convert an overlap reach in 1/K0 to mobility scans using the run's mean
@@ -1570,6 +1592,9 @@ impl<'a> RunContext<'a> {
         let md = MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
         // The accessor serves the run's scale; a multi-calibration run (which the
         // gates refuse) keeps the linear scale here, as before 0.4.0.
+        // The gates above already refused a run they cannot calibrate, so a
+        // failure here only affects this accessor: warn and serve the linear scale
+        // rather than refuse a run no gate needs a calibration for.
         let (_, im_segments) = tdf::count_calibration_segments(&in_tdf)?;
         let scan2im = if im_segments > 1 {
             warn!(
@@ -1577,7 +1602,10 @@ impl<'a> RunContext<'a> {
             );
             ScanToMobility::Linear(md.im_converter)
         } else {
-            mobility::load(&in_tdf, stages.mobility_scale, md.im_converter)?
+            mobility::load(&in_tdf, stages.mobility_scale, md.im_converter).unwrap_or_else(|e| {
+                warn!("{e}; Calibration::scan_to_im uses the linear scale");
+                ScanToMobility::Linear(md.im_converter)
+            })
         };
         let calibration = Calibration {
             tof2mz: md.mz_converter,
@@ -1661,6 +1689,60 @@ impl<'a> RunContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn benchmark_calibration() -> ScanToMobility {
+        // The TimsCalibration row used by the mobility.rs load test.
+        ScanToMobility::Calibrated(
+            mobility::TimsCalibrationModel::new(
+                2,
+                [
+                    1.0,
+                    935.0,
+                    239.34640606518187,
+                    102.96946384662338,
+                    33.64485981308411,
+                    1.0,
+                    -0.026580764926972034,
+                    171.42849749723894,
+                    16.838457909616054,
+                    1732.6649859338625,
+                ],
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn window_scans_without_pad_is_the_half_open_window_exactly() {
+        let im = benchmark_calibration();
+        for begin in 0..900u32 {
+            assert_eq!(
+                window_scans(begin, begin + 30, 0.0, &im, 936),
+                (begin, begin + 29)
+            );
+        }
+        assert_eq!(window_scans(920, 1000, 0.0, &im, 936), (920, 935));
+    }
+
+    #[test]
+    fn window_scans_tiny_pad_adds_no_scan_from_float_noise() {
+        // A pad far below one scan's 1/K0 width must not widen the window.
+        let im = benchmark_calibration();
+        for begin in 1..900u32 {
+            assert_eq!(
+                window_scans(begin, begin + 30, 1e-9, &im, 936),
+                (begin, begin + 29)
+            );
+        }
+    }
+
+    #[test]
+    fn window_scans_pad_widens_both_edges() {
+        let im = benchmark_calibration();
+        let (lo, hi) = window_scans(400, 430, 0.01, &im, 936);
+        assert!(lo < 400 && hi > 429, "({lo}, {hi})");
+        assert!((im.convert(f64::from(lo)) - im.convert(400.0)).abs() <= 0.01 + 1e-3);
+    }
 
     #[test]
     fn frame_sampled_fraction_one_keeps_every_frame() {
