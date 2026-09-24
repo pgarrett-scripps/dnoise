@@ -141,14 +141,12 @@ Validate any output with
 
 ## Reproducing the paper
 
-The accompanying manuscript's results were produced with the immutable
-[dnoise v0.1.0 release](https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.1.0),
-archived on Zenodo under
-[10.5281/zenodo.21959650](https://doi.org/10.5281/zenodo.21959650). v0.3.0 writes
-byte-identical output for ddaPASEF on all three arms and for diaPASEF MS1-only.
-It differs only for optional diaPASEF fragment denoising, where it fixes a
-v0.1.0 defect that let the per-window filter run across touching isolation
-windows; see the 0.3.0 entry in [CHANGELOG.md](CHANGELOG.md). The raw
+The accompanying manuscript's results were produced with the
+[dnoise v0.4.0 release](https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.4.0).
+The original submission used v0.1.0, archived on Zenodo under
+[10.5281/zenodo.21959650](https://doi.org/10.5281/zenodo.21959650); 0.4.0
+changes the default MS1 gates, so its output differs (see the 0.4.0 entry in
+[CHANGELOG.md](CHANGELOG.md)). The raw
 benchmark `.d` files are public on PRIDE
 ([PXD070049](https://www.ebi.ac.uk/pride/archive/projects/PXD070049)); the
 manuscript and Supporting Information report the complete dnoise parameters
@@ -160,8 +158,8 @@ If you use dnoise in your research, please cite it. Machine-readable metadata is
 in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository" button reads it),
 and each tagged release is archived on Zenodo.
 
-> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.3.0) [Software].
-> Zenodo. https://doi.org/10.5281/zenodo.22756840
+> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.4.0) [Software].
+> Zenodo. https://doi.org/10.5281/zenodo.21959649
 
 The accompanying paper has been submitted to the *Journal of
 the American Society for Mass Spectrometry*. Its preprint and journal citation
