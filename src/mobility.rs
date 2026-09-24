@@ -345,6 +345,8 @@ mod tests {
               1732.6649859338625);").unwrap();
         let conv = load(&path, MobilityScale::Calibrated, lin).unwrap();
         assert!((conv.convert(0.0) - 1.481819026431424).abs() < 1e-12);
+        // Windows cannot delete a file an open connection holds.
+        drop(conn);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
