@@ -39,8 +39,8 @@ The diaPASEF MS1 window gate now covers exactly a window's
 `[ScanNumBegin, ScanNumEnd)` scans when `dia_ms1_im_pad` is 0. Before, the end
 scan was included and float noise in the scan -> 1/K0 -> scan round trip could
 add a scan at either edge. `Calibration::scan_to_im` falls back to the linear
-scale with a warning when a run's calibration cannot be read; the gates still
-refuse such a run.
+scale with a warning when a run's calibration cannot be read; any gate that
+applies to the run still refuses it.
 
 The MS/MS isolation-window gate (`--dia-window`) is unchanged: outside a
 window's scans the quadrupole passes none of its precursors.
@@ -57,8 +57,10 @@ window's scans the quadrupole passes none of its precursors.
 ### Changed
 - `ms1_polygon_mz_pad`, `ms1_polygon_im_pad`, `dia_ms1_mz_pad` and
   `dia_ms1_im_pad` default to 0 (were 5 Da and 0.05 1/K0). To reproduce 0.3.0,
-  pass `--no-ms1-polygon-overlap --ms1-polygon-mz-pad 5 --ms1-polygon-im-pad 0.05`
-  (and the `dia-ms1` equivalents).
+  pass `--linear-mobility --no-ms1-polygon-overlap --ms1-polygon-mz-pad 5
+  --ms1-polygon-im-pad 0.05` (and the `dia-ms1` equivalents). The diaPASEF
+  window gate then matches 0.3.0 to within one scan at each window's high-scan
+  edge, because the pad is now measured from the window's last scan.
 
 ## [0.3.0] - 2026-09-14
 

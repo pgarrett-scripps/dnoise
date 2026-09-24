@@ -1273,8 +1273,9 @@ fn build_dia_ms1_gate(
 /// Inclusive scan range of a `[scan_begin, scan_end)` isolation window, padded by
 /// `im_pad` in 1/K0. With no pad the window's own scans are returned exactly;
 /// otherwise the edges go scan -> 1/K0 -> padded -> scan, taking min/max so the
-/// result is right for either conversion direction. The rounding tolerance keeps
-/// float noise in the round trip from adding a scan at either edge.
+/// result is right for either conversion direction. A padded window is rounded
+/// outward; the rounding tolerance keeps float noise in the round trip from
+/// adding a scan at either edge.
 fn window_scans(
     scan_begin: u32,
     scan_end: u32,
