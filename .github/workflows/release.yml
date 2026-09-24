@@ -87,7 +87,7 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dnoise-${{ matrix.target_name }}
           path: dist/*
@@ -104,7 +104,7 @@ jobs:
       # Every matrix job's package, back in one place. Each uploaded its own
       # named artifact containing a single archive. Keep them outside the source
       # checkout so cargo publish sees only committed package contents.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dnoise-*
           path: ${{ runner.temp }}/dnoise-artifacts
