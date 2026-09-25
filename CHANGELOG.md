@@ -6,10 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.5.0] (unreleased)
+## [0.5.0] - 2026-09-25
 
-**Default MS1 output changes on ddaPASEF and diaPASEF.** Three changes to the
-MS1 stages; the first two widen what is kept near a gate edge:
+**Default output changes on ddaPASEF and diaPASEF.** The halo filter's default
+`peak_fraction` is 0.10 (0.4.0: 0.15), which keeps more of each isotope
+envelope; this changes MS1 output and, with `--denoise-msms`, MS/MS output.
+Pass `--halo-peak-fraction 0.15` (or `[halo] peak_fraction = 0.15`) for 0.4.0's
+value. Three further changes to the MS1 stages; the first two widen what is
+kept near a gate edge:
 
 - A feature kept by feature-level gating is now kept over its whole extent.
   0.4.0 cut it at 0.1 1/K0 beyond the mobility range of its inside points.
@@ -55,6 +59,9 @@ MS1 stages; the first two widen what is kept near a gate edge:
   units.
 
 ### Changed
+- Halo filter: default `peak_fraction` 0.10 (was 0.15). A box-kernel sweep on
+  the benchmark data put 0.10 within about 1,000 identifications of a trained
+  kernel at matched removal.
 - MS1 m/z pre-cut: with one MS1 gate active, points far outside the gate's TOF
   range skip the streak filter. Output is unchanged (the margin covers the
   streak filter's reach, and a feature that escapes the range reruns the frame
@@ -321,7 +328,8 @@ First public release.
 - The SQLite `tdf` plumbing is now crate-private. The type-2 codec moved to the
   public `dnoise::codec` module (`dnoise::tdf::encode::*` → `dnoise::codec::*`).
 
-[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.3.0
 [0.1.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.1.0

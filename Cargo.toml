@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "dnoise"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Patrick Garrett <pgarrett@scripps.edu>"]
@@ -44,7 +44,7 @@ required-features = ["cli"]
 [dependencies]
 # Library dependencies. The in-memory stages live in dnoise-core (no I/O, no
 # native dependencies); keep its version in lockstep with this crate's.
-dnoise-core = { path = "dnoise-core", version = "0.4.0" }
+dnoise-core = { path = "dnoise-core", version = "0.5.0" }
 rayon = "1.12.0"
 rusqlite = { version = "0.35", features = ["bundled"] }
 thiserror = "2.0.18"

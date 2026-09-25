@@ -158,7 +158,7 @@ If you use dnoise in your research, please cite it. Machine-readable metadata is
 in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository" button reads it),
 and each tagged release is archived on Zenodo.
 
-> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.4.0) [Software].
+> Garrett, P., Diedrich, J. K., & Yates, J. R. III. dnoise (version 0.5.0) [Software].
 > Zenodo. https://doi.org/10.5281/zenodo.21959649
 
 The accompanying paper has been submitted to the *Journal of
