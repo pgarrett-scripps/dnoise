@@ -32,7 +32,9 @@ The CLI defaults used in the benchmark are:
 
 Before step 1, when exactly one MS1 gate is active, points whose TOF index lies
 more than `(num_iterations + 1) × mz_half_width` outside the gate's TOF range
-are set aside unfiltered. This m/z pre-cut changes no output: the streak filter
+are dropped before the streak filter (the gate would drop them anyway). The
+pre-cut is skipped for frames handled with temporal neighbor support. It
+changes no output: the streak filter
 decides a point from points within `num_iterations × mz_half_width` TOF indices
 of it, so every point the gate can reach is decided as on the whole frame. A
 feature-level gate can keep a feature that runs past the gate's m/z range; such

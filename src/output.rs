@@ -153,10 +153,10 @@ impl OutputTransaction {
                 "install failed: {error}; {recovery}"
             )));
         }
-        if let Some(backup) = backup {
-            if let Err(e) = fs::remove_dir_all(&backup) {
-                tracing::warn!(path = %backup.display(), "output installed; backup cleanup failed: {e}");
-            }
+        if let Some(backup) = backup
+            && let Err(e) = fs::remove_dir_all(&backup)
+        {
+            tracing::warn!(path = %backup.display(), "output installed; backup cleanup failed: {e}");
         }
         Ok(())
     }

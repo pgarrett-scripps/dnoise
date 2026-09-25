@@ -159,7 +159,7 @@ pub fn padded_box(
     num_scans: usize,
 ) -> TofScanBox {
     // m/z edges -> TOF indices (monotonic), padded by mz_pad on each side.
-    let t0 = mz_to_tof(b.mz_lo - p.mz_pad);
+    let t0 = mz_to_tof((b.mz_lo - p.mz_pad).max(0.0));
     let t1 = mz_to_tof(b.mz_hi + p.mz_pad);
     let tof_lo = t0.min(t1).floor().max(0.0) as u32;
     let tof_hi = t1.max(t0).ceil().max(0.0) as u32;

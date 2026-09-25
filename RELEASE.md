@@ -15,7 +15,7 @@ the same version. Bump `dnoise-core/Cargo.toml`'s `version` and the
    `CHANGELOG.md` has a dated 0.5.0 section and `[Unreleased]` is empty.
 2. Local gate: `cargo fmt --all --check`, `cargo clippy --workspace
    --all-targets -- -D warnings`, `cargo test --release --workspace`,
-   `cargo publish --dry-run --locked`.
+   `cargo publish --dry-run --locked --workspace`.
 3. Push `release/0.5.0`, open a PR to `main`, wait for CI to pass, then
    fast-forward `main` so the tagged commit is the one tested.
 4. `gh release create v0.5.0 --target main` with the 0.5.0 changelog as notes.
@@ -24,13 +24,13 @@ the same version. Bump `dnoise-core/Cargo.toml`'s `version` and the
 5. Cite the version DOI in the paper. `CITATION.cff` and `README.md` use the
    concept DOI, so no DOI changes there.
 
-## Output changes from 0.3.0
+## Output changes from 0.4.0
 
-Default MS1 output changes on both acquisition types (feature-level overlap
-gates, no fixed pads, Bruker-calibrated 1/K0). Dry-run on the 5-minute benchmark
-runs, all points kept: ddaPASEF 111,722,871 of 297,755,895; diaPASEF
-755,841,088 of 1,321,535,492. `--linear-mobility` reproduces the
-pre-calibration counts. MS/MS output is unchanged.
+Default output changes on both acquisition types: halo `peak_fraction` 0.10,
+MS1 gates padded 3 Th / 0.015 1/K0 with unlimited feature reach, and the MS1
+stage order streak, gate, halo. See the 0.5.0 CHANGELOG entry. The crate split
+and the timsrust-tdf port alone are byte-identical to 0.4.0 on the 5-minute
+benchmark runs.
 
 ---
 

@@ -96,8 +96,10 @@ pub fn validate(params: &FilterParams, stages: &Stages) -> Result<()> {
             "neighbor_max_rt_gap must be finite and positive (seconds)",
         ));
     }
-    if params.max_internal_gap == usize::MAX {
-        return Err(invalid("max_internal_gap is too large"));
+    if params.max_internal_gap >= u32::MAX as usize || params.num_iterations > u32::MAX as usize {
+        return Err(invalid(
+            "max_internal_gap and num_iterations must be below 2^32",
+        ));
     }
     if stages.watershed.is_some() && stages.box_centroid.is_some() {
         return Err(invalid("choose only one centroider"));
@@ -105,7 +107,7 @@ pub fn validate(params: &FilterParams, stages: &Stages) -> Result<()> {
     if let Some(h) = stages.halo {
         if !h.peak_fraction.is_finite()
             || !(0.0..=1.0).contains(&h.peak_fraction)
-            || h.scan_half_width > i64::MAX as usize
+            || h.scan_half_width > u32::MAX as usize
         {
             return Err(invalid(
                 "halo fraction must be finite in [0,1], with a valid scan width",
@@ -301,9 +303,11 @@ impl<'a> Denoiser<'a> {
         self.crop_only
     }
 
-    /// ddaPASEF per-precursor keep sets for MS/MS denoising.
+    /// ddaPASEF per-precursor keep sets for MS/MS denoising. Ignored (stored as
+    /// `None`) when MS/MS denoising does not run for this acquisition
+    /// ([`effective_stages`]), as the `dnoise` CLI never builds them then.
     pub fn set_msms_keep(&mut self, keep: Option<MsmsKeep>) {
-        self.msms_keep = keep;
+        self.msms_keep = keep.filter(|_| self.stages.denoise_msms.is_some());
     }
 
     /// Checked prm-PASEF isolation events. With `denoise_msms` set, each event
@@ -337,14 +341,16 @@ impl<'a> Denoiser<'a> {
         self.dda_windows = windows;
     }
 
-    /// The diaPASEF MS1 out-of-window gate.
+    /// The diaPASEF MS1 out-of-window gate. Ignored in crop-only mode and when
+    /// the gate does not run for this acquisition ([`effective_stages`]).
     pub fn set_dia_ms1_gate(&mut self, gate: Option<DiaMs1Gate>) {
-        self.dia_ms1 = gate;
+        self.dia_ms1 = gate.filter(|_| self.stages.dia_ms1.is_some() && !self.crop_only);
     }
 
-    /// The MS1 selection-polygon gate.
+    /// The MS1 selection-polygon gate. Ignored in crop-only mode and when the
+    /// gate does not run for this acquisition ([`effective_stages`]).
     pub fn set_polygon_gate(&mut self, gate: Option<PolygonGate>) {
-        self.polygon = gate;
+        self.polygon = gate.filter(|_| self.stages.ms1_polygon.is_some() && !self.crop_only);
     }
 
     /// The point-level region-of-interest crop (every frame).
@@ -425,7 +431,7 @@ impl<'a> Denoiser<'a> {
         read_frame: &dyn Fn(usize) -> Result<FlatFrame>,
         cancel: Option<&AtomicBool>,
     ) -> Result<DecodedFrame> {
-        let meta_i = &self.meta[i];
+        let meta_i = self.frame_meta(i)?;
         // Empty input frames are not read: a reader cannot decode an absent
         // payload. The `dnoise` writer still writes them as an all-zero scan
         // table so the output stays readable.
@@ -450,7 +456,7 @@ impl<'a> Denoiser<'a> {
     /// not MS1, or when temporal neighbors are enabled for it (use
     /// [`Self::process`] with a frame source then).
     pub fn denoise_ms1(&self, i: usize, frame: &FlatFrame) -> Result<DecodedFrame> {
-        if !self.meta[i].is_ms1() {
+        if !self.frame_meta(i)?.is_ms1() {
             return Err(Error::InvalidInput(format!(
                 "frame {} is not an MS1 frame",
                 self.meta[i].id
@@ -463,13 +469,49 @@ impl<'a> Denoiser<'a> {
     /// MS1, or when temporal neighbors are enabled for it (use [`Self::process`]
     /// with a frame source then).
     pub fn denoise_msms(&self, i: usize, frame: &FlatFrame) -> Result<DecodedFrame> {
-        if self.meta[i].is_ms1() {
+        if self.frame_meta(i)?.is_ms1() {
             return Err(Error::InvalidInput(format!(
                 "frame {} is not an MS/MS frame",
                 self.meta[i].id
             )));
         }
         self.denoise_frame(i, frame, &no_neighbors, None)
+    }
+
+    /// `meta[i]`, or an error for an index outside the run.
+    fn frame_meta(&self, i: usize) -> Result<&FrameMeta> {
+        self.meta.get(i).ok_or_else(|| {
+            Error::InvalidInput(format!(
+                "frame index {i} is outside the run ({} frames)",
+                self.meta.len()
+            ))
+        })
+    }
+
+    /// Check a caller's frame against `meta[i]`: same id and scan count, and
+    /// every point inside the scan range and the column arrays equal in length.
+    fn check_frame(&self, i: usize, flat: &FlatFrame) -> Result<()> {
+        let m = self.frame_meta(i)?;
+        let n = flat.scan.len();
+        if flat.frame_id != m.id || flat.num_scans != m.num_scans {
+            return Err(Error::InvalidInput(format!(
+                "frame {} ({} scans) passed for index {i}, which is frame {} ({} scans)",
+                flat.frame_id, flat.num_scans, m.id, m.num_scans
+            )));
+        }
+        if flat.tof.len() != n || flat.intensity.len() != n {
+            return Err(Error::InvalidInput(format!(
+                "frame {}: scan, tof and intensity columns differ in length",
+                m.id
+            )));
+        }
+        if flat.scan.iter().any(|&s| s as usize >= m.num_scans) {
+            return Err(Error::InvalidInput(format!(
+                "frame {}: a point's scan is outside 0..{}",
+                m.id, m.num_scans
+            )));
+        }
+        Ok(())
     }
 
     /// The whole per-frame pipeline, in its one fixed order.
@@ -480,6 +522,7 @@ impl<'a> Denoiser<'a> {
         read_frame: &dyn Fn(usize) -> Result<FlatFrame>,
         cancel: Option<&AtomicBool>,
     ) -> Result<DecodedFrame> {
+        self.check_frame(i, flat)?;
         // The stages that act per frame; the polygon/dia_ms1/denoise_msms knobs were
         // already consumed into the gates and keep sets held by `self`.
         let &Stages {
@@ -872,6 +915,7 @@ fn apply_halo(frame: &FlatFrame, hp: &HaloParams, keep: &mut [bool]) {
 mod tests {
     use super::*;
     use crate::dia_ms1::TofScanBox;
+    use crate::params::DiaMs1WindowParams;
 
     fn meta(ms_ms_type: i64) -> Vec<FrameMeta> {
         vec![FrameMeta {
@@ -977,11 +1021,36 @@ mod tests {
     }
 
     #[test]
+    fn bad_frames_are_errors_not_panics() {
+        let d = Denoiser::new(
+            &FilterParams::default(),
+            &Stages::default(),
+            Acquisition::Ms1Only,
+            meta(0),
+            false,
+        )
+        .unwrap();
+        assert!(d.denoise_ms1(0, &lone_point()).is_ok());
+        assert!(d.denoise_ms1(1, &lone_point()).is_err());
+        let mut f = lone_point();
+        f.scan = vec![700];
+        assert!(d.denoise_ms1(0, &f).is_err());
+        let mut f = lone_point();
+        f.frame_id = 2;
+        assert!(d.denoise_ms1(0, &f).is_err());
+        let mut f = lone_point();
+        f.tof.push(9);
+        assert!(d.denoise_ms1(0, &f).is_err());
+    }
+
+    #[test]
     fn precut_matches_the_whole_frame() {
         let p = FilterParams::default();
         let halo = HaloParams::default();
+        let dia_ms1 = DiaMs1WindowParams::default();
         let s = Stages {
             halo: Some(&halo),
+            dia_ms1: Some(&dia_ms1),
             ..Stages::default()
         };
         let frame = gated_frame();
@@ -1016,6 +1085,9 @@ mod tests {
         };
         let s = Stages::default();
         let e = Denoiser::new(&p, &s, Acquisition::Ms1Only, meta(0), false).unwrap_err();
-        assert_eq!(e.to_string(), "max_internal_gap is too large");
+        assert_eq!(
+            e.to_string(),
+            "max_internal_gap and num_iterations must be below 2^32"
+        );
     }
 }

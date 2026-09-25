@@ -245,10 +245,10 @@ pub fn parameters(
             return Err(invalid("intensity crop bounds are reversed"));
         }
     }
-    if let Some(s) = options.sample {
-        if !options.dry_run || !s.fraction.is_finite() || s.fraction <= 0.0 || s.fraction > 1.0 {
-            return Err(invalid("sampling requires dry-run and a fraction in (0,1]"));
-        }
+    if let Some(s) = options.sample
+        && (!options.dry_run || !s.fraction.is_finite() || s.fraction <= 0.0 || s.fraction > 1.0)
+    {
+        return Err(invalid("sampling requires dry-run and a fraction in (0,1]"));
     }
     Ok(())
 }

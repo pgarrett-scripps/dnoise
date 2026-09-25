@@ -173,7 +173,7 @@ pub fn decode_frame_type2(record: &[u8]) -> Result<DecodedFrame, DecodeError> {
     if scan_count > n {
         return Err(DecodeError::ScanCountOverflow { scan_count, len: n });
     }
-    if scan_count == 0 || scan_count != header_scans || (n - scan_count) % 2 != 0 {
+    if scan_count == 0 || scan_count != header_scans || !(n - scan_count).is_multiple_of(2) {
         return Err(invalid());
     }
     let peak_count = (n - scan_count) / 2;

@@ -274,10 +274,13 @@ impl Config {
                 key.replace('_', "-")
             );
         }
-        if let (Some(old), Some(new)) = (self.frame_half_width, self.ms1_neighbor_radius) {
-            if old != new {
-                return Err(DnoiseError::InvalidInput("frame_half_width and ms1_neighbor_radius disagree; use only ms1_neighbor_radius".into()));
-            }
+        if let (Some(old), Some(new)) = (self.frame_half_width, self.ms1_neighbor_radius)
+            && old != new
+        {
+            return Err(DnoiseError::InvalidInput(
+                "frame_half_width and ms1_neighbor_radius disagree; use only ms1_neighbor_radius"
+                    .into(),
+            ));
         }
         let msms = self.denoise_msms.unwrap_or(false) || self.all_frames.unwrap_or(false);
         let d = FilterParams::default();

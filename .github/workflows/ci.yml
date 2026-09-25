@@ -42,18 +42,21 @@ jobs:
       - name: Test
         run: cargo +1.97.1 test --workspace --locked
 
-  # Cargo.toml advertises rust-version = "1.85" as the minimum supported
+  # Cargo.toml advertises rust-version = "1.88" (dnoise-core: 1.85) as the minimum supported
   # compiler, and nothing checked it: a 2024-edition feature stabilized after
   # 1.85 could land and break only for the people who trusted that field.
   # The library alone, because the GUI has its own much newer toolchain floor.
   msrv:
-    name: MSRV (1.85, library + CLI)
+    name: MSRV (dnoise-core 1.85; library + CLI 1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +1.85.0 check -p dnoise -p dnoise-core --all-targets --locked
+      # timsrust-tdf's url -> idna -> icu_* 2.x needs rustc 1.88; the core has no such deps.
+      - run: cargo +1.85.0 check -p dnoise-core --all-targets --locked
+      - run: cargo +1.88.0 check -p dnoise -p dnoise-core --all-targets --locked
 
   # What a crate consumer actually gets. `cargo +1.97.1 test --workspace --locked` always builds
   # with default features, so nothing here exercised the library without the CLI

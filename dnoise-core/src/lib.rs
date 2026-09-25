@@ -7,7 +7,8 @@
 //! 1. builds one [`Denoiser`] per run from [`FrameMeta`] and the parameters,
 //! 2. attaches any per-run state its stages need (see [`pipeline`]),
 //! 3. calls [`Denoiser::process`], [`Denoiser::denoise_ms1`] or
-//!    [`Denoiser::denoise_msms`] per frame, in any order, from any thread.
+//!    [`Denoiser::denoise_msms`] per frame, in any order, from any thread
+//!    (`Denoiser` is `Send + Sync`, checked at compile time).
 //!
 //! The `dnoise` crate runs exactly this path for its CLI and writes the
 //! survivors into a new `.d` folder.
@@ -77,3 +78,9 @@ pub use windows::{DiaWindows, FrameMeta, PasefWindow};
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
+
+// `Denoiser` is shared across threads by embedders; keep it Send + Sync.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Denoiser<'static>>();
+};

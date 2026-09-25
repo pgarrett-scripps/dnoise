@@ -581,10 +581,10 @@ fn run<F: FnMut(Progress)>(
     for chunk in selected.chunks(frame_batch_size.unwrap_or(CHUNK)) {
         // Cooperative cancellation: check once per chunk (a real run's partial
         // output is incomplete, so the caller discards it on Cancelled).
-        if let Some(c) = cancel {
-            if c.load(Ordering::Relaxed) {
-                return Err(DnoiseError::Cancelled);
-            }
+        if let Some(c) = cancel
+            && c.load(Ordering::Relaxed)
+        {
+            return Err(DnoiseError::Cancelled);
         }
         let processed: Vec<ProcessedFrame> = chunk
             .par_iter()

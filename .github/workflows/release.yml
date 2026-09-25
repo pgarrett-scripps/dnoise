@@ -153,6 +153,8 @@ jobs:
       # Irreversible steps last, and only once the release above exists.
       # dnoise-core first: dnoise depends on it by version. cargo publish waits
       # until the new version is in the index before returning.
+      # Not idempotent: if dnoise-core published and dnoise failed, rerun
+      # publish-crate.yml (it skips a dnoise-core version already on the index).
       - name: Publish dnoise-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -11,8 +11,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 **Default output changes on ddaPASEF and diaPASEF.** The halo filter's default
 `peak_fraction` is 0.10 (0.4.0: 0.15), which keeps more of each isotope
 envelope; this changes MS1 output and, with `--denoise-msms`, MS/MS output.
-Pass `--halo-peak-fraction 0.15` (or `[halo] peak_fraction = 0.15`) for 0.4.0's
-value. Three further changes to the MS1 stages; the first two widen what is
+Pass `--halo-peak-fraction 0.15` (or `halo_peak_fraction = 0.15` in the
+config) for 0.4.0's value. Three further changes to the MS1 stages; the first two widen what is
 kept near a gate edge:
 
 - A feature kept by feature-level gating is now kept over its whole extent.
