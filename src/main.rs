@@ -225,9 +225,8 @@ struct Cli {
     /// diaPASEF MS1 gate: gate point by point instead of by feature (0.3.0).
     #[arg(long)]
     no_dia_ms1_overlap: bool,
-    /// diaPASEF MS1 gate, overlap mode: how far a kept feature may extend beyond
-    /// the mobility range of its inside points, in 1/K0 (0 = unlimited).
-    #[arg(long)]
+    /// Deprecated in 0.5.0 (reach is unlimited): accepted and ignored, with a warning.
+    #[arg(long, hide = true)]
     dia_ms1_overlap_reach: Option<f64>,
 
     /// Drop MS1 points outside the run's ddaPASEF/PASEF selection polygon (the IMS
@@ -256,9 +255,8 @@ struct Cli {
     /// MS1 polygon gate: gate point by point instead of by feature (0.3.0).
     #[arg(long)]
     no_ms1_polygon_overlap: bool,
-    /// MS1 polygon gate, overlap mode: how far a kept feature may extend beyond
-    /// the mobility range of its inside points, in 1/K0 (0 = unlimited).
-    #[arg(long)]
+    /// Deprecated in 0.5.0 (reach is unlimited): accepted and ignored, with a warning.
+    #[arg(long, hide = true)]
     ms1_polygon_overlap_reach: Option<f64>,
 
     /// Convert mobility scans to 1/K0 with timsrust's straight line between the

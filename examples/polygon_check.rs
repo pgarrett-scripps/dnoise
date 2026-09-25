@@ -12,12 +12,12 @@ mod polygon_ref;
 
 use dnoise::PolygonGate;
 use dnoise::mobility::TimsCalibrationModel;
+use dnoise::tsr::ConvertableDomain;
+use dnoise::tsr::MetadataReader;
 use polygon_ref::{Grid, check_gate};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
-use dnoise::tsr::ConvertableDomain;
-use dnoise::tsr::MetadataReader;
 
 const PADS: [(f64, f64); 5] = [
     (0.0, 0.0),

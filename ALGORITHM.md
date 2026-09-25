@@ -26,7 +26,7 @@ The CLI defaults used in the benchmark are:
 3. Apply the acquisition-appropriate MS1 gate when its geometry is present:
    the PASEF selection polygon for ddaPASEF, or the union of isolation
    windows for diaPASEF. The gate keeps a whole streak-filter feature when any
-   of its points lies inside, up to 0.1 1/K0 beyond its inside points.
+   of its points lies inside, over the feature's full mobility extent.
 4. Copy MS/MS frames unchanged.
 5. Encode every frame in its original order and update the database metadata.
 

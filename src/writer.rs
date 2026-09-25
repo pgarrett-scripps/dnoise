@@ -1027,8 +1027,8 @@ pub fn process_frame_decoded(
         // is in no padded isolation window. Composes as an AND on the keep mask.
         if let Some(gate) = dia_ms1 {
             let mut mask = gate.keep_mask(&to_filter.scan, &to_filter.tof);
-            if let Some(reach) = gate.overlap {
-                mask = overlap_mask(to_filter, &keep, &mask, params, reach);
+            if gate.overlap {
+                mask = overlap_mask(to_filter, &keep, &mask, params);
             }
             for (slot, in_win) in keep.iter_mut().zip(mask) {
                 *slot &= in_win;
@@ -1038,8 +1038,8 @@ pub fn process_frame_decoded(
         // PolygonFilter region (never-selected precursor space). Also ANDed in.
         if let Some(gate) = polygon {
             let mut mask = gate.keep_mask(&to_filter.scan, &to_filter.tof);
-            if let Some(reach) = gate.overlap {
-                mask = overlap_mask(to_filter, &keep, &mask, params, reach);
+            if gate.overlap {
+                mask = overlap_mask(to_filter, &keep, &mask, params);
             }
             for (slot, inside) in keep.iter_mut().zip(mask) {
                 *slot &= inside;
@@ -1261,11 +1261,8 @@ fn build_dia_ms1_gate(
         })
         .collect();
 
-    let reach = p
-        .overlap
-        .then(|| reach_in_scans(p.overlap_reach, |s| im.convert(s as f64), num_scans));
     Ok(DiaMs1Gate::build(&tof_boxes, num_scans).map(|mut g| {
-        g.overlap = reach;
+        g.overlap = p.overlap;
         g
     }))
 }
@@ -1299,30 +1296,14 @@ fn window_scans(
     (lo.min(hi), hi)
 }
 
-/// Convert an overlap reach in 1/K0 to mobility scans using the run's mean
-/// 1/K0-per-scan slope, rounded up. `0.0` (unlimited) maps to `u32::MAX`.
-fn reach_in_scans(reach: f64, im_at_scan: impl Fn(u32) -> f64, num_scans: usize) -> u32 {
-    if reach <= 0.0 {
-        return u32::MAX;
-    }
-    let last = num_scans.saturating_sub(1).max(1) as u32;
-    let per_scan = (im_at_scan(0) - im_at_scan(last)).abs() / f64::from(last);
-    if per_scan.is_nan() || per_scan <= 0.0 {
-        return u32::MAX;
-    }
-    (reach / per_scan).ceil().min(f64::from(u32::MAX - 1)) as u32
-}
-
 /// Feature-level gate mask: link surviving points with the streak filter's own
 /// adjacency (column half-width, bridged gap + 1) and keep features that touch
-/// the gate anywhere, up to `reach` scans beyond their inside points. See
-/// [`crate::overlap`].
+/// the gate anywhere, over their whole extent. See [`crate::overlap`].
 fn overlap_mask(
     frame: &FlatFrame,
     keep: &[bool],
     inside: &[bool],
     params: &FilterParams,
-    reach: u32,
 ) -> Vec<bool> {
     crate::overlap::extend_to_features(
         &frame.scan,
@@ -1331,7 +1312,6 @@ fn overlap_mask(
         inside,
         params.mz_half_width,
         params.max_internal_gap as u32 + 1,
-        reach,
     )
 }
 
@@ -1371,9 +1351,6 @@ fn build_polygon_gate(
         return Ok(None);
     }
     let k0 = mobility::load(in_tdf, scale, md.im_converter)?;
-    let reach = p
-        .overlap
-        .then(|| reach_in_scans(p.overlap_reach, |s| k0.convert(s as f64), num_scans));
     let im_at_scan = |s: u32| k0.convert(s as f64);
     let mz_to_tof = |mz: f64| md.mz_converter.invert(mz);
     let Some(mut gate) = PolygonGate::build(
@@ -1395,7 +1372,7 @@ fn build_polygon_gate(
                 p.im_pad
             ))
         })?;
-    gate.overlap = reach;
+    gate.overlap = p.overlap;
     Ok(Some(gate))
 }
 

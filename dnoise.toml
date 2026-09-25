@@ -114,11 +114,10 @@ dda_window_scan_pad = 0
 # ddaPASEF. On by default. Set dia_ms1_window = false (or --no-dia-ms1-window) to
 # disable.
 dia_ms1_window = true
-# Feature-level gating (true) or point-by-point (false, the 0.3.0 behavior).
+# Feature-level gating (true) or point-by-point (false, the 0.3.0 behavior). A
+# kept feature is kept over its whole mobility extent. (0.4.0's
+# *_overlap_reach keys are still accepted but ignored, with a warning.)
 dia_ms1_overlap = true
-# How far a kept feature may extend beyond the mobility range of its inside
-# points, in 1/K0. 0 = unlimited.
-dia_ms1_overlap_reach = 0.1
 # m/z leniency added to each side of every window, in Daltons (0.3.0: 5.0).
 dia_ms1_mz_pad = 0.0
 # Ion-mobility leniency added to each side of every window, in 1/K0 (0.3.0: 0.05).
@@ -137,9 +136,6 @@ ms1_polygon = true
 # Feature-level gating: keep a whole streak-filter feature when any of its points
 # lies inside the polygon (false = point by point, the 0.3.0 behavior).
 ms1_polygon_overlap = true
-# How far a kept feature may extend beyond the mobility range of its inside
-# points, in 1/K0. 0 = unlimited.
-ms1_polygon_overlap_reach = 0.1
 # m/z leniency added to each side of the polygon, in Daltons. 0 = literal
 # polygon (0.3.0: 5.0).
 ms1_polygon_mz_pad = 0.0
@@ -147,7 +143,7 @@ ms1_polygon_mz_pad = 0.0
 # (0.3.0: 0.05).
 ms1_polygon_im_pad = 0.0
 
-# Scan <-> 1/K0 scale for both MS1 gates (pads and reach) and the mobility crop.
+# Scan <-> 1/K0 scale for both MS1 gates (pads) and the mobility crop.
 # "calibrated" uses the run's TimsCalibration, the scale Bruker defines the
 # polygon and isolation windows on. "linear" is timsrust's straight line between
 # the acquisition-range bounds (dnoise before 0.4.0; --linear-mobility).

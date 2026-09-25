@@ -71,12 +71,17 @@ pub struct Config {
     pub dia_ms1_mz_pad: Option<f64>,
     pub dia_ms1_im_pad: Option<f64>,
     pub dia_ms1_overlap: Option<bool>,
+    /// Deprecated in 0.5.0 (reach is now unlimited): still accepted so 0.4.0
+    /// configs load, but ignored with a warning and never written.
+    #[serde(skip_serializing)]
     pub dia_ms1_overlap_reach: Option<f64>,
     // MS1 selection-polygon gate.
     pub ms1_polygon: Option<bool>,
     pub ms1_polygon_mz_pad: Option<f64>,
     pub ms1_polygon_im_pad: Option<f64>,
     pub ms1_polygon_overlap: Option<bool>,
+    /// Deprecated in 0.5.0, like `dia_ms1_overlap_reach`.
+    #[serde(skip_serializing)]
     pub ms1_polygon_overlap_reach: Option<f64>,
     /// `"calibrated"` (default) or `"linear"`.
     pub mobility_scale: Option<crate::mobility::MobilityScale>,
@@ -101,6 +106,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// Deprecated keys that are set: accepted for compatibility with older
+    /// configs, ignored by [`Config::resolve`] (which warns about each).
+    pub fn deprecated_keys(&self) -> Vec<&'static str> {
+        let mut keys = Vec::new();
+        if self.dia_ms1_overlap_reach.is_some() {
+            keys.push("dia_ms1_overlap_reach");
+        }
+        if self.ms1_polygon_overlap_reach.is_some() {
+            keys.push("ms1_polygon_overlap_reach");
+        }
+        keys
+    }
+
     /// Load and parse a TOML config file. Returns a human-readable error string on
     /// a read or parse failure (including unknown keys).
     pub fn load(path: &Path) -> Result<Self, String> {
@@ -140,6 +158,19 @@ mod tests {
         assert!(s.contains("mz_half_width = 4"));
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(c, back);
+    }
+
+    #[test]
+    fn deprecated_overlap_reach_loads_but_is_ignored_and_not_saved() {
+        // 0.4.0 configs set these; they must still load.
+        let c: Config =
+            toml::from_str("ms1_polygon_overlap_reach = 0.1\ndia_ms1_overlap_reach = 0.0").unwrap();
+        assert_eq!(
+            c.deprecated_keys(),
+            vec!["dia_ms1_overlap_reach", "ms1_polygon_overlap_reach"]
+        );
+        let s = c.to_toml_string().unwrap();
+        assert!(!s.contains("overlap_reach"));
     }
 
     #[test]
@@ -236,6 +267,13 @@ impl ResolvedConfig {
 impl Config {
     /// Resolve defaults and ppm conversion using the same rules in both front ends.
     pub fn resolve(&self, input: &Path) -> crate::Result<ResolvedConfig> {
+        for key in self.deprecated_keys() {
+            tracing::warn!(
+                "{key} / --{} is deprecated and ignored: since 0.5.0 a feature kept by an \
+                 MS1 gate is kept whole (unlimited reach)",
+                key.replace('_', "-")
+            );
+        }
         if let (Some(old), Some(new)) = (self.frame_half_width, self.ms1_neighbor_radius) {
             if old != new {
                 return Err(DnoiseError::InvalidInput("frame_half_width and ms1_neighbor_radius disagree; use only ms1_neighbor_radius".into()));
@@ -316,7 +354,6 @@ impl Config {
             mz_pad: self.dia_ms1_mz_pad.unwrap_or(d.mz_pad),
             im_pad: self.dia_ms1_im_pad.unwrap_or(d.im_pad),
             overlap: self.dia_ms1_overlap.unwrap_or(d.overlap),
-            overlap_reach: self.dia_ms1_overlap_reach.unwrap_or(d.overlap_reach),
         };
         let dia_ms1 = self.dia_ms1_window.unwrap_or(true).then_some(dia_ms1);
         let d = Ms1PolygonParams::default();
@@ -324,7 +361,6 @@ impl Config {
             mz_pad: self.ms1_polygon_mz_pad.unwrap_or(d.mz_pad),
             im_pad: self.ms1_polygon_im_pad.unwrap_or(d.im_pad),
             overlap: self.ms1_polygon_overlap.unwrap_or(d.overlap),
-            overlap_reach: self.ms1_polygon_overlap_reach.unwrap_or(d.overlap_reach),
         };
         let ms1_polygon = self.ms1_polygon.unwrap_or(true).then_some(ms1_polygon);
         let mut filter = filter;
@@ -459,14 +495,12 @@ impl Config {
             c.dia_ms1_mz_pad = Some(p.mz_pad);
             c.dia_ms1_im_pad = Some(p.im_pad);
             c.dia_ms1_overlap = Some(p.overlap);
-            c.dia_ms1_overlap_reach = Some(p.overlap_reach);
         }
         c.ms1_polygon = Some(stages.ms1_polygon.is_some());
         if let Some(p) = stages.ms1_polygon {
             c.ms1_polygon_mz_pad = Some(p.mz_pad);
             c.ms1_polygon_im_pad = Some(p.im_pad);
             c.ms1_polygon_overlap = Some(p.overlap);
-            c.ms1_polygon_overlap_reach = Some(p.overlap_reach);
         }
         if let Some(crop) = options.crop {
             c.mz_min = crop.mz_min;

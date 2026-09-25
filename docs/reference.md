@@ -53,10 +53,9 @@ so binary offsets stay consistent.
 | `--dda-window-scan-pad` | 0 | Scans of leniency added to each side of every isolation event. |
 | `--dia-ms1-window` | on | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented, see below). `--no-dia-ms1-window` disables. |
 | `--dia-ms1-overlap` | on | MS1 gate: keep a whole streak-filter feature when any of its points lies in a window. `--no-dia-ms1-overlap` gates point by point (0.3.0). |
-| `--dia-ms1-overlap-reach` | 0.1 | MS1 gate, overlap mode: how far (1/K0) a kept feature may extend beyond the mobility range of its inside points; 0 = unlimited. |
 | `--dia-ms1-mz-pad` | 0 | MS1 gate: m/z leniency (Da) added to each side of every window (0.3.0: 5). |
 | `--dia-ms1-im-pad` | 0 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window (0.3.0: 0.05). |
-| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space). Auto-detected, so it is a no-op if the run stores no polygon or defines a diaPASEF window scheme. `--no-ms1-polygon` disables. Feature-level gating: `--ms1-polygon-overlap` (on; `--no-ms1-polygon-overlap` for point by point), `--ms1-polygon-overlap-reach` (1/K0, default 0.1). Pads: `--ms1-polygon-mz-pad` (Da, default 0), `--ms1-polygon-im-pad` (1/K0, default 0). |
+| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space). Auto-detected, so it is a no-op if the run stores no polygon or defines a diaPASEF window scheme. `--no-ms1-polygon` disables. Feature-level gating: `--ms1-polygon-overlap` (on; `--no-ms1-polygon-overlap` for point by point). Pads: `--ms1-polygon-mz-pad` (Da, default 0), `--ms1-polygon-im-pad` (1/K0, default 0). |
 | `--smooth` | off | Final stage: box-average each survivor's intensity over its `(scan, TOF-index)` box (stabilises the watershed centroider). Sub: `--smooth-mz-idx-half-width`, `--smooth-scan-half-width`, `--smooth-iterations`. |
 | `--watershed` | off | Final stage: watershed centroiding, collapsing point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
 | `--box-centroid` | off | Final stage: greedy small-box centroiding, tiling streaks into small centroids rather than collapsing them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
@@ -178,11 +177,11 @@ with the streak filter's own adjacency (within `mz-half-width` TOF indices and
 `max-internal-gap + 1` scans), and a feature is kept whole when any of its
 points lies inside a window. A precursor whose mobility peak straddles a window
 edge therefore keeps its full mobility spread, and a feature lying wholly
-outside every window is dropped. A kept feature may extend at most
-`--dia-ms1-overlap-reach` (1/K0, default 0.1) beyond the mobility range of its
-inside points, which stops a long constant-m/z line that clips a window from
-being carried across the whole mobility range; bright precursor features in the
-benchmark runs span under 0.1 1/K0.
+outside every window is dropped. A kept feature is kept over its whole
+mobility extent. (0.4.0 capped that at `--dia-ms1-overlap-reach`, default 0.1
+1/K0; the cap was removed in 0.5.0 and the `--dia-ms1-overlap-reach` /
+`--ms1-polygon-overlap-reach` flags and config keys are accepted but ignored,
+with a warning.)
 
 Optional pads widen each window in **physical units** before the test:
 `--dia-ms1-mz-pad` (Da) and `--dia-ms1-im-pad` (1/K0), both 0 by default and

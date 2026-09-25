@@ -185,11 +185,9 @@ pub struct DiaMs1WindowParams {
     /// Ion-mobility leniency added to each side of every window, in **1/K0**.
     pub im_pad: f64,
     /// Keep a whole MS1 feature when any of its points lies inside a (padded)
-    /// window, instead of gating point by point ([`crate::overlap`]).
+    /// window, instead of gating point by point ([`crate::overlap`]). A kept
+    /// feature is kept over its whole extent (no mobility reach limit).
     pub overlap: bool,
-    /// Overlap mode: how far, in **1/K0**, a kept feature may extend beyond the
-    /// mobility range of its inside points. `0.0` = unlimited.
-    pub overlap_reach: f64,
 }
 
 impl Default for DiaMs1WindowParams {
@@ -198,7 +196,6 @@ impl Default for DiaMs1WindowParams {
             mz_pad: 0.0,
             im_pad: 0.0,
             overlap: true,
-            overlap_reach: 0.1,
         }
     }
 }
@@ -210,7 +207,7 @@ impl Default for DiaMs1WindowParams {
 /// a precursor and can be dropped from the survey scans. The polygon itself comes
 /// from the data; the pads add physical-unit leniency so a precursor near an edge
 /// keeps its isotopic envelope (m/z) and mobility spread (1/K0). Defaults match
-/// [`DiaMs1WindowParams`]: no pads, feature-level gating with a 0.1 1/K0 reach.
+/// [`DiaMs1WindowParams`]: no pads, feature-level gating.
 /// `overlap = false` with `mz_pad = 5.0`, `im_pad = 0.05` reproduces 0.3.0.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Ms1PolygonParams {
@@ -220,11 +217,9 @@ pub struct Ms1PolygonParams {
     /// Ion-mobility leniency added to each side, in **1/K0**.
     pub im_pad: f64,
     /// Keep a whole MS1 feature when any of its points lies inside the (padded)
-    /// polygon, instead of gating point by point ([`crate::overlap`]).
+    /// polygon, instead of gating point by point ([`crate::overlap`]). A kept
+    /// feature is kept over its whole extent (no mobility reach limit).
     pub overlap: bool,
-    /// Overlap mode: how far, in **1/K0**, a kept feature may extend beyond the
-    /// mobility range of its inside points. `0.0` = unlimited.
-    pub overlap_reach: f64,
 }
 
 impl Default for Ms1PolygonParams {
@@ -233,7 +228,6 @@ impl Default for Ms1PolygonParams {
             mz_pad: 0.0,
             im_pad: 0.0,
             overlap: true,
-            overlap_reach: 0.1,
         }
     }
 }
@@ -367,7 +361,6 @@ mod tests {
         assert_eq!(d.mz_pad, 0.0);
         assert_eq!(d.im_pad, 0.0);
         assert!(d.overlap);
-        assert_eq!(d.overlap_reach, 0.1);
     }
 
     #[test]
@@ -379,7 +372,6 @@ mod tests {
         assert_eq!(p.mz_pad, d.mz_pad);
         assert_eq!(p.im_pad, d.im_pad);
         assert_eq!(p.overlap, d.overlap);
-        assert_eq!(p.overlap_reach, d.overlap_reach);
     }
 
     #[test]
@@ -555,7 +547,7 @@ pub struct Stages<'a> {
     /// when the run stores no polygon.
     /// `None` disables it.
     pub ms1_polygon: Option<&'a Ms1PolygonParams>,
-    /// Scan ↔ 1/K0 scale for the two MS1 gates, their 1/K0 pads and reach, and
+    /// Scan ↔ 1/K0 scale for the two MS1 gates, their 1/K0 pads, and
     /// the mobility crop ([`crate::mobility`]). Defaults to Bruker's
     /// acquisition calibration, the scale the polygon and windows are defined on.
     pub mobility_scale: crate::mobility::MobilityScale,

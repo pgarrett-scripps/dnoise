@@ -243,21 +243,14 @@ pub fn parameters(
             ));
         }
     }
-    for (mz, im, reach) in stages
+    for (mz, im) in stages
         .ms1_polygon
-        .map(|p| (p.mz_pad, p.im_pad, p.overlap_reach))
+        .map(|p| (p.mz_pad, p.im_pad))
         .into_iter()
-        .chain(
-            stages
-                .dia_ms1
-                .map(|p| (p.mz_pad, p.im_pad, p.overlap_reach)),
-        )
+        .chain(stages.dia_ms1.map(|p| (p.mz_pad, p.im_pad)))
     {
         if !mz.is_finite() || !im.is_finite() || mz < 0.0 || im < 0.0 {
             return Err(invalid("gate padding must be finite and nonnegative"));
-        }
-        if !reach.is_finite() || reach < 0.0 {
-            return Err(invalid("gate overlap reach must be finite and nonnegative"));
         }
     }
     if options.crop_only && options.crop.is_none_or(|c| c.is_empty()) {

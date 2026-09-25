@@ -13,11 +13,9 @@
 //! or apex falls partly outside the region is therefore kept intact, and a feature
 //! lying wholly outside is dropped, with no fixed pad deciding where to cut.
 //!
-//! A kept feature may extend at most `reach` scans beyond the mobility range of
-//! its inside points. Real precursor features span well under 0.1 1/K0 (the
-//! 99th percentile of bright features in the benchmark runs is about 0.08), so the
-//! default reach keeps them whole while stopping a long constant-m/z line that
-//! merely clips the gate from being carried across the whole mobility range.
+//! A kept feature is kept over its whole extent: there is no limit on how far it
+//! may run beyond the mobility range of its inside points. (0.4.0 capped this at
+//! an `overlap_reach` of 0.1 1/K0; 0.5.0 removed the cap.)
 
 /// Extend a point-level gate mask to whole features.
 ///
@@ -28,12 +26,9 @@
 ///   column half-width).
 /// * `scan_gap` — scan distance that links two points (the streak filter's
 ///   largest bridged gap plus one).
-/// * `reach` — how many scans a kept feature may extend beyond the scan range of
-///   its inside points (`u32::MAX` = unlimited).
 ///
 /// Returns a mask that is `true` for kept points belonging to a feature with at
-/// least one inside point and lying within `reach` scans of that feature's inside
-/// points. Points not in `keep` are always `false`.
+/// least one inside point. Points not in `keep` are always `false`.
 pub fn extend_to_features(
     scan: &[u32],
     tof: &[u32],
@@ -41,7 +36,6 @@ pub fn extend_to_features(
     inside: &[bool],
     tof_tol: u32,
     scan_gap: u32,
-    reach: u32,
 ) -> Vec<bool> {
     let n = scan.len();
     let mut out = vec![false; n];
@@ -110,20 +104,17 @@ pub fn extend_to_features(
         }
     }
 
-    // Scan range of each feature's inside points; empty (lo > hi) = no hit.
-    let mut span = vec![(u32::MAX, 0u32); m];
+    // Features (roots) with at least one inside point.
+    let mut hit = vec![false; m];
     for k in 0..m {
         if inside[idx[k]] {
             let r = find(&mut parent, k);
-            let s = scan[idx[k]];
-            span[r] = (span[r].0.min(s), span[r].1.max(s));
+            hit[r] = true;
         }
     }
     for k in 0..m {
         let r = find(&mut parent, k);
-        let (lo, hi) = span[r];
-        let s = scan[idx[k]];
-        out[idx[k]] = lo <= hi && s.saturating_add(reach) >= lo && s <= hi.saturating_add(reach);
+        out[idx[k]] = hit[r];
     }
     out
 }
@@ -141,7 +132,7 @@ mod tests {
         let mut inside = vec![false; 6];
         inside[5] = true;
         assert_eq!(
-            extend_to_features(&scan, &tof, &keep, &inside, 3, 3, u32::MAX),
+            extend_to_features(&scan, &tof, &keep, &inside, 3, 3),
             vec![true; 6]
         );
     }
@@ -154,7 +145,7 @@ mod tests {
         let keep = vec![true; 6];
         let inside = vec![true, false, false, false, false, false];
         assert_eq!(
-            extend_to_features(&scan, &tof, &keep, &inside, 3, 3, u32::MAX),
+            extend_to_features(&scan, &tof, &keep, &inside, 3, 3),
             vec![true, true, true, false, false, false]
         );
     }
@@ -167,25 +158,23 @@ mod tests {
         let keep = vec![true, true];
         let inside = vec![true, false];
         assert_eq!(
-            extend_to_features(&scan, &tof, &keep, &inside, 3, 3, u32::MAX),
+            extend_to_features(&scan, &tof, &keep, &inside, 3, 3),
             vec![true, false]
         );
     }
 
     #[test]
-    fn reach_limits_how_far_a_feature_extends_beyond_the_gate() {
-        // One streak over scans 0..10; only scan 9 is inside. Reach 3 keeps 6..=9.
-        let scan: Vec<u32> = (0..10).collect();
-        let tof = vec![100; 10];
-        let keep = vec![true; 10];
-        let mut inside = vec![false; 10];
-        inside[9] = true;
-        let got = extend_to_features(&scan, &tof, &keep, &inside, 3, 3, 3);
-        let want: Vec<bool> = (0..10).map(|s| s >= 6).collect();
-        assert_eq!(got, want);
-        // Reach 0 keeps only the inside point itself.
-        let got = extend_to_features(&scan, &tof, &keep, &inside, 3, 3, 0);
-        assert_eq!(got, (0..10).map(|s| s == 9).collect::<Vec<_>>());
+    fn a_long_feature_is_kept_whole_however_far_it_runs_past_the_gate() {
+        // One streak over scans 0..200; only scan 199 is inside. No reach cap.
+        let scan: Vec<u32> = (0..200).collect();
+        let tof = vec![100; 200];
+        let keep = vec![true; 200];
+        let mut inside = vec![false; 200];
+        inside[199] = true;
+        assert_eq!(
+            extend_to_features(&scan, &tof, &keep, &inside, 3, 3),
+            vec![true; 200]
+        );
     }
 
     #[test]
@@ -196,12 +185,12 @@ mod tests {
         let inside = vec![true, true, false];
         // Scan 0 and 2 are 2 apart: still linked with scan_gap 3.
         assert_eq!(
-            extend_to_features(&scan, &tof, &keep, &inside, 3, 3, u32::MAX),
+            extend_to_features(&scan, &tof, &keep, &inside, 3, 3),
             vec![true, false, true]
         );
         // With scan_gap 1 the removed middle point no longer bridges them.
         assert_eq!(
-            extend_to_features(&scan, &tof, &keep, &inside, 3, 1, u32::MAX),
+            extend_to_features(&scan, &tof, &keep, &inside, 3, 1),
             vec![true, false, false]
         );
     }
