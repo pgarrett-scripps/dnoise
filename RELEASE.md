@@ -4,9 +4,9 @@ Status: **in progress, 2026-09-23.** v0.3.0's record is kept below.
 
 ## Steps
 
-1. Version 0.4.0 in `Cargo.toml`, `dnoise-gui/Cargo.toml`, `Cargo.lock` and
-   `CITATION.cff` (with `date-released`); `CHANGELOG.md` has a dated 0.4.0
-   section and `[Unreleased]` is empty.
+1. Version 0.4.0 in `Cargo.toml`, `dnoise-gui/Cargo.toml` and `Cargo.lock`,
+   then `just cite-sync` to copy it and today's date into `CITATION.cff`;
+   `CHANGELOG.md` has a dated 0.4.0 section and `[Unreleased]` is empty.
 2. Local gate: `cargo fmt --all --check`, `cargo clippy --workspace
    --all-targets -- -D warnings`, `cargo test --release --workspace`,
    `cargo publish --dry-run --locked`.
@@ -15,7 +15,8 @@ Status: **in progress, 2026-09-23.** v0.3.0's record is kept below.
 4. `gh release create v0.4.0 --target main` with the 0.4.0 changelog as notes.
    `release.yml` attaches the binaries and publishes the crate; Zenodo mints the
    version DOI.
-5. Record the Zenodo DOI in `CITATION.cff` and `README.md`, and in the paper.
+5. Cite the version DOI in the paper. `CITATION.cff` and `README.md` use the
+   concept DOI, so no DOI changes there.
 
 ## Output changes from 0.3.0
 

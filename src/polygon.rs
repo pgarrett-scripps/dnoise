@@ -39,7 +39,10 @@ impl PolygonGate {
     /// * `mz_pad` widens each in-polygon m/z interval by this many Da per side and
     ///   `im_pad` widens the test by this much `1/K0` per side, so a precursor near
     ///   an edge keeps its isotopic envelope / mobility spread. `0.0`/`0.0`
-    ///   reproduces the literal polygon.
+    ///   reproduces the literal polygon. With both pads the gate is the polygon's
+    ///   Minkowski sum with the `±mz_pad x ±im_pad` rectangle, sampled at each
+    ///   scan's 1/K0 (exact for any ring shape, including thin spikes and sharp
+    ///   vertices between scans); a non-positive `im_pad` means no mobility pad.
     ///
     /// Returns `None` when the polygon is degenerate (< 3 vertices, mismatched
     /// lengths), `num_scans == 0`, or the polygon covers no scan's mobility (so the
@@ -58,20 +61,29 @@ impl PolygonGate {
             return None;
         }
 
+        // 1/K0 levels where the band projection can change shape (vertices and
+        // edge crossings); only needed when there is a mobility pad.
+        let critical = if im_pad > 0.0 {
+            critical_levels(mz, im)
+        } else {
+            Vec::new()
+        };
+
         let mut per_scan: Vec<Vec<(u32, u32)>> = vec![Vec::new(); num_scans];
         for (s, slot) in per_scan.iter_mut().enumerate() {
             let y0 = im_at_scan(s as u32);
 
-            // Union the inside m/z intervals across the padded 1/K0 band, so a
-            // point within `im_pad` of the polygon (in mobility) is kept. With no
-            // im_pad this is a single scan-line at y0.
-            let mut spans: Vec<(f64, f64)> = Vec::new();
-            for y in [y0 - im_pad, y0, y0 + im_pad] {
-                spans.extend(scanline_spans(mz, im, y));
-                if im_pad == 0.0 {
-                    break;
-                }
-            }
+            // With no im_pad: the single scan-line at y0. With an im_pad: the
+            // exact m/z projection of the polygon inside the whole band
+            // [y0 - im_pad, y0 + im_pad], so a point within `im_pad` of the
+            // polygon (in mobility) is kept however thin or pointed the polygon
+            // is there. (Sampling a few lines in the band misses spikes and
+            // sharp vertices lying between them.)
+            let mut spans = if im_pad > 0.0 {
+                band_spans(mz, im, &critical, y0 - im_pad, y0 + im_pad)
+            } else {
+                scanline_spans(mz, im, y0)
+            };
             if spans.is_empty() {
                 continue;
             }
@@ -112,6 +124,38 @@ impl PolygonGate {
             per_scan,
             overlap: None,
         })
+    }
+
+    /// Build-time self-check: every scan's *unpadded* polygon interval (the
+    /// literal scan-line at that scan's 1/K0, converted to TOF exactly as
+    /// [`Self::build`] does) must lie inside one of this gate's intervals for the
+    /// same scan. Padding may only ever add points, so a failure means the gate
+    /// would drop signal inside the instrument's own selection polygon — a bug,
+    /// or a negative pad. Pass the same polygon and converters used to build.
+    /// Costs one extra unpadded build (a few thousand scan-lines).
+    pub fn check_contains_unpadded(
+        &self,
+        mz: &[f64],
+        im: &[f64],
+        im_at_scan: impl Fn(u32) -> f64,
+        mz_to_tof: impl Fn(f64) -> f64,
+    ) -> Result<(), String> {
+        let Some(base) = Self::build(mz, im, self.per_scan.len(), im_at_scan, mz_to_tof, 0.0, 0.0)
+        else {
+            return Ok(()); // the polygon covers no scan: nothing to contain
+        };
+        for (s, (inner, outer)) in base.per_scan.iter().zip(&self.per_scan).enumerate() {
+            for &(lo, hi) in inner {
+                let i = outer.partition_point(|&(_, o_hi)| o_hi < lo);
+                if !(i < outer.len() && outer[i].0 <= lo && hi <= outer[i].1) {
+                    return Err(format!(
+                        "scan {s}: polygon TOF interval [{lo}, {hi}] is not inside the padded \
+                         gate's intervals {outer:?}"
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// True when the point lies inside the polygon (and should be kept).
@@ -165,6 +209,87 @@ fn scanline_spans(mz: &[f64], im: &[f64], y: f64) -> Vec<(f64, f64)> {
     }
     xs.sort_by(f64::total_cmp);
     xs.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
+
+/// Sorted, deduplicated 1/K0 levels at which the set of polygon edges crossing
+/// a horizontal line, or their left-to-right order, can change: every vertex,
+/// plus every proper crossing of two non-adjacent edges (only a self-intersecting
+/// ring has those). Between two consecutive levels each inside span's ends move
+/// linearly with 1/K0.
+fn critical_levels(mz: &[f64], im: &[f64]) -> Vec<f64> {
+    let n = mz.len();
+    let mut ys: Vec<f64> = im.to_vec();
+    for i in 0..n {
+        let (ax, ay, bx, by) = (mz[i], im[i], mz[(i + 1) % n], im[(i + 1) % n]);
+        for k in i + 2..n {
+            if i == 0 && k == n - 1 {
+                continue; // adjacent through the ring closure
+            }
+            let (cx, cy, dx, dy) = (mz[k], im[k], mz[(k + 1) % n], im[(k + 1) % n]);
+            let den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+            if den == 0.0 {
+                continue; // parallel or collinear: order along y cannot swap
+            }
+            let t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
+            let u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den;
+            if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                ys.push(ay + t * (by - ay));
+            }
+        }
+    }
+    ys.retain(|y| y.is_finite());
+    ys.sort_by(f64::total_cmp);
+    ys.dedup();
+    ys
+}
+
+/// m/z spans covering the polygon's intersection with the closed band
+/// `a <= 1/K0 <= b` (`a < b`), projected onto m/z: exactly the m/z values `x`
+/// for which some point `(x, y)` with `y` in the band lies in the (closed)
+/// polygon. `critical` is [`critical_levels`] of the same polygon.
+///
+/// The band is cut at the critical levels into slabs. Inside a slab the same
+/// edges cross every horizontal line in the same order, so each inside span's
+/// ends move linearly, and the union of that span over the slab is simply the
+/// hull of its extents at the slab's two boundary lines. Spans may overlap; the
+/// caller merges them.
+fn band_spans(mz: &[f64], im: &[f64], critical: &[f64], a: f64, b: f64) -> Vec<(f64, f64)> {
+    let n = mz.len();
+    let first = critical.partition_point(|&y| y <= a);
+    let mut levels = Vec::with_capacity(critical.len().min(8) + 2);
+    levels.push(a);
+    levels.extend(critical[first..].iter().copied().take_while(|&y| y < b));
+    levels.push(b);
+
+    let mut spans = Vec::new();
+    // Per crossing edge: (m/z at slab middle, m/z at slab bottom, m/z at top).
+    let mut xs: Vec<(f64, f64, f64)> = Vec::new();
+    for w in levels.windows(2) {
+        let (lo, hi) = (w[0], w[1]);
+        if hi <= lo {
+            continue;
+        }
+        let mid = 0.5 * (lo + hi);
+        xs.clear();
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (yi, yj) = (im[i], im[j]);
+            // Same half-open rule as `scanline_spans`. No vertex lies strictly
+            // inside the slab, so an edge crossing `mid` spans all of [lo, hi].
+            if (yi > mid) != (yj > mid) {
+                let at = |y: f64| {
+                    let t = ((y - yi) / (yj - yi)).clamp(0.0, 1.0);
+                    mz[i] + t * (mz[j] - mz[i])
+                };
+                xs.push((at(mid), at(lo), at(hi)));
+            }
+        }
+        xs.sort_by(|p, q| p.0.total_cmp(&q.0));
+        for c in xs.chunks_exact(2) {
+            spans.push((c[0].1.min(c[0].2), c[1].1.max(c[1].2)));
+        }
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -236,6 +361,50 @@ mod tests {
         assert!(!gate.contains(50, 50)); // in the notch
         // Below the notch floor (scan 10) the interior is one solid span.
         assert!(gate.contains(10, 50));
+    }
+
+    #[test]
+    fn im_pad_catches_a_sliver_between_scan_lines() {
+        // Body plus a sideways spike to m/z 90 that lies wholly between scan
+        // lines 50 and 51. Sampling y0 - pad, y0, y0 + pad (the pre-0.5 rule)
+        // misses it from scan 45; the band projection keeps it.
+        let mz = vec![0.0, 20.0, 20.0, 90.0, 20.0, 20.0, 0.0];
+        let im = vec![0.0, 0.0, 50.2, 50.5, 50.8, 100.0, 100.0];
+        let gate = PolygonGate::build(&mz, &im, 101, id_im, id_tof, 0.0, 6.0).unwrap();
+        for s in 45..=56 {
+            assert!(gate.contains(s, 80), "scan {s}");
+        }
+        assert!(!gate.contains(44, 80));
+        assert!(!gate.contains(57, 80));
+    }
+
+    #[test]
+    fn band_keeps_a_sharp_vertex_between_sampled_lines() {
+        // Triangle apex at m/z 50, 1/K0 50.5. With pad 3 the apex is within
+        // pad of scans 48..=53 and must be kept there at m/z 50.
+        let mz = vec![0.0, 100.0, 50.0];
+        let im = vec![0.0, 0.0, 50.5];
+        let gate = PolygonGate::build(&mz, &im, 101, id_im, id_tof, 0.0, 3.0).unwrap();
+        for s in 48..=53 {
+            assert!(gate.contains(s, 50), "scan {s}");
+        }
+        assert!(!gate.contains(54, 50));
+    }
+
+    #[test]
+    fn self_check_accepts_padded_and_rejects_shrunk_gates() {
+        let mz = vec![0.0, 100.0, 50.0];
+        let im = vec![0.0, 0.0, 50.5];
+        for (mzp, imp) in [(0.0, 0.0), (2.0, 0.0), (0.0, 3.0), (5.0, 5.0)] {
+            let g = PolygonGate::build(&mz, &im, 101, id_im, id_tof, mzp, imp).unwrap();
+            assert!(g.check_contains_unpadded(&mz, &im, id_im, id_tof).is_ok());
+        }
+        let shrunk = PolygonGate::build(&mz, &im, 101, id_im, id_tof, -3.0, 0.0).unwrap();
+        assert!(
+            shrunk
+                .check_contains_unpadded(&mz, &im, id_im, id_tof)
+                .is_err()
+        );
     }
 
     #[test]

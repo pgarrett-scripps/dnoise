@@ -95,3 +95,17 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r examples/requirements-validation.txt
       - run: python -m unittest discover -s examples -p 'test_validate_acquisitions.py'
+
+  # CITATION.cff's version is filled in by `just cite-sync` at release; this
+  # catches a release that bumped Cargo.toml and forgot it (same check as
+  # `just cite-check`).
+  citation:
+    name: CITATION.cff matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          cff=$(sed -n 's/^version: //p' CITATION.cff)
+          grep -Eq '^date-released: "[0-9]{4}-[0-9]{2}-[0-9]{2}"$' CITATION.cff || { echo "CITATION.cff: missing or malformed date-released"; exit 1; }
+          [ "$crate" = "$cff" ] || { echo "CITATION.cff version $cff != Cargo.toml $crate: run just cite-sync"; exit 1; }

@@ -43,3 +43,21 @@ validate path:
 # Remove build artifacts
 clean:
   cargo clean
+
+# Copy Cargo.toml's version and a release date (default today) into CITATION.cff
+cite-sync date=`date +%F`:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+  sed -i -E "s/^version: .*/version: $v/; s/^date-released: .*/date-released: \"{{date}}\"/" CITATION.cff
+  echo "CITATION.cff: version $v, date-released {{date}}"
+
+# Fail if CITATION.cff's version differs from Cargo.toml's (CI runs the same check)
+cite-check:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+  cff=$(sed -n 's/^version: //p' CITATION.cff)
+  grep -Eq '^date-released: "[0-9]{4}-[0-9]{2}-[0-9]{2}"$' CITATION.cff || { echo "CITATION.cff: missing or malformed date-released"; exit 1; }
+  [ "$crate" = "$cff" ] || { echo "CITATION.cff version $cff != Cargo.toml $crate: run just cite-sync"; exit 1; }
+  echo "CITATION.cff matches Cargo.toml ($crate)"

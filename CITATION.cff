@@ -2,11 +2,11 @@
 # Zenodo, which uses it to populate the metadata of the archived release rather
 # than guessing from the repository name.
 #
-# Two things to update at release time:
-#   - `version` and `date-released` must match the tag being archived.
-#   - once Zenodo has minted a DOI, add it under `identifiers` so the record is
-#     self-describing. Once the paper is published, fill in `preferred-citation`
-#     with its DOI so citing the software points readers at the paper.
+# `version` and `date-released` are never edited by hand: `just cite-sync` copies
+# the version from Cargo.toml and today's date at release time, and CI fails if
+# `version` and Cargo.toml disagree. `identifiers` holds only the concept DOI,
+# which resolves to the latest version, so it never changes. Once the paper is
+# published, fill in `preferred-citation` with its DOI.
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
 title: dnoise
