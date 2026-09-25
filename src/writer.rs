@@ -1374,19 +1374,29 @@ fn build_polygon_gate(
     let reach = p
         .overlap
         .then(|| reach_in_scans(p.overlap_reach, |s| k0.convert(s as f64), num_scans));
-    Ok(PolygonGate::build(
-        &mz,
-        &im,
-        num_scans,
-        |s| k0.convert(s as f64),
-        |mz| md.mz_converter.invert(mz),
-        p.mz_pad,
-        p.im_pad,
-    )
-    .map(|mut g| {
-        g.overlap = reach;
-        g
-    }))
+    let im_at_scan = |s: u32| k0.convert(s as f64);
+    let mz_to_tof = |mz: f64| md.mz_converter.invert(mz);
+    let Some(mut gate) = PolygonGate::build(
+        &mz, &im, num_scans, im_at_scan, mz_to_tof, p.mz_pad, p.im_pad,
+    ) else {
+        return Ok(None);
+    };
+    // Padding may only add points: refuse to run with a gate that would drop
+    // signal inside the instrument's own selection polygon.
+    gate.check_contains_unpadded(&mz, &im, im_at_scan, mz_to_tof)
+        .map_err(|e| {
+            DnoiseError::InvalidInput(format!(
+                "{}: MS1 polygon gate self-check failed (m/z pad {} Da, 1/K0 pad {}): the \
+                 padded gate does not contain the selection polygon ({e}). Pads must be >= 0; \
+                 otherwise this is a dnoise bug, please report it. Disable the gate with \
+                 ms1_polygon = false / --no-ms1-polygon to proceed.",
+                in_tdf.display(),
+                p.mz_pad,
+                p.im_pad
+            ))
+        })?;
+    gate.overlap = reach;
+    Ok(Some(gate))
 }
 
 /// Run the horizontal-halo filter on the currently-kept points of `frame` and
