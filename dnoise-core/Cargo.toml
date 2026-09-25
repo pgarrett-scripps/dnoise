@@ -1,0 +1,23 @@
+[package]
+name = "dnoise-core"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Patrick Garrett <pgarrett@scripps.edu>"]
+description = "Pure-Rust, in-memory timsTOF frame denoising stages of dnoise (no I/O, no native dependencies)."
+repository = "https://github.com/pgarrett-scripps/dnoise"
+homepage = "https://github.com/pgarrett-scripps/dnoise"
+documentation = "https://docs.rs/dnoise-core"
+readme = "README.md"
+license = "MIT"
+keywords = ["mass-spectrometry", "proteomics", "timstof", "denoising", "bruker"]
+categories = ["science", "algorithms"]
+
+# Keep this crate free of I/O and native code: no timsrust, SQLite, zstd, or any
+# crate with a `links` key (rayon included). CI checks the dependency tree.
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+serde_json = "1.0"

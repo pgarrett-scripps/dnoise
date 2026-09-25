@@ -1,15 +1,13 @@
 //! Acquisition classification and checked prm-PASEF metadata.
-use super::FrameMeta;
+use super::{FrameMeta, PrmWindows};
 use crate::{Acquisition, DnoiseError, Result};
 use rusqlite::{Connection, OpenFlags};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 fn invalid(message: impl Into<String>) -> DnoiseError {
     DnoiseError::InvalidInput(format!("invalid prm-PASEF metadata: {}", message.into()))
 }
-
-pub(crate) type PrmWindows = HashMap<usize, Vec<(u32, u32)>>;
 
 pub(crate) struct AcquisitionInfo {
     pub kind: Acquisition,

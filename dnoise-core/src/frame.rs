@@ -1,10 +1,26 @@
 //! Flat per-point view of a timsTOF frame in native integer `(scan, tof, intensity)` space.
 
+/// A decoded frame in CSR layout: `scan_offsets` is a row pointer, so scan `s`
+/// holds points `scan_offsets[s]..scan_offsets[s + 1]` of `tof_indices` /
+/// `intensities`. This is the layout timsrust decodes to; implement it for your
+/// reader's frame type to use [`FlatFrame::from_frame`], or call
+/// [`FlatFrame::from_csr`] with the slices directly.
+pub trait CsrFrame {
+    /// Frame identifier (`Frames.Id`).
+    fn frame_id(&self) -> usize;
+    /// CSR row pointer with `num_scans + 1` entries.
+    fn scan_offsets(&self) -> &[usize];
+    /// Per-point TOF index.
+    fn tof_indices(&self) -> &[u32];
+    /// Per-point raw intensity.
+    fn intensities(&self) -> &[u32];
+}
+
 /// A frame expanded into three parallel per-point arrays plus its scan count.
 ///
-/// `crate::tsr::Frame` stores points in CSR form (`scan_offsets` is a row pointer
-/// into `tof_indices` / `intensities`). The filter works on flat per-point
-/// arrays, so we expand once on load and regroup once before encoding.
+/// Readers decode frames in CSR form ([`CsrFrame`]: `scan_offsets` is a row
+/// pointer into `tof_indices` / `intensities`). The filter works on flat
+/// per-point arrays, so we expand once on load and regroup once before encoding.
 #[derive(Debug, Clone)]
 pub struct FlatFrame {
     /// Frame `Id` from the `Frames` table (used for the DB update WHERE clause).
@@ -20,21 +36,37 @@ pub struct FlatFrame {
 }
 
 impl FlatFrame {
-    /// Expand a `crate::tsr::Frame` into flat per-point arrays.
-    pub fn from_frame(frame: &crate::tsr::Frame) -> Self {
-        let num_scans = frame.scan_offsets.len().saturating_sub(1);
-        let n = frame.tof_indices.len();
+    /// Expand a CSR frame ([`CsrFrame`]) into flat per-point arrays.
+    pub fn from_frame<F: CsrFrame + ?Sized>(frame: &F) -> Self {
+        Self::from_csr(
+            frame.frame_id(),
+            frame.scan_offsets(),
+            frame.tof_indices(),
+            frame.intensities(),
+        )
+    }
+
+    /// Expand CSR slices into flat per-point arrays. `scan_offsets` has
+    /// `num_scans + 1` entries; `tof_indices` and `intensities` are parallel.
+    pub fn from_csr(
+        frame_id: usize,
+        scan_offsets: &[usize],
+        tof_indices: &[u32],
+        intensities: &[u32],
+    ) -> Self {
+        let num_scans = scan_offsets.len().saturating_sub(1);
+        let n = tof_indices.len();
         let mut scan = Vec::with_capacity(n);
         for s in 0..num_scans {
-            let count = frame.scan_offsets[s + 1] - frame.scan_offsets[s];
+            let count = scan_offsets[s + 1] - scan_offsets[s];
             scan.extend(std::iter::repeat_n(s as u32, count));
         }
         Self {
-            frame_id: frame.index,
+            frame_id,
             num_scans,
             scan,
-            tof: frame.tof_indices.clone(),
-            intensity: frame.intensities.clone(),
+            tof: tof_indices.to_vec(),
+            intensity: intensities.to_vec(),
         }
     }
 
@@ -61,6 +93,29 @@ impl FlatFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Csr {
+        index: usize,
+        scan_offsets: Vec<usize>,
+        tof_indices: Vec<u32>,
+        intensities: Vec<u32>,
+    }
+
+    impl CsrFrame for Csr {
+        fn frame_id(&self) -> usize {
+            self.index
+        }
+        fn scan_offsets(&self) -> &[usize] {
+            &self.scan_offsets
+        }
+        fn tof_indices(&self) -> &[u32] {
+            &self.tof_indices
+        }
+        fn intensities(&self) -> &[u32] {
+            &self.intensities
+        }
+    }
 
     fn frame(scan: Vec<u32>, tof: Vec<u32>, intensity: Vec<u32>) -> FlatFrame {
         FlatFrame {
@@ -101,7 +156,7 @@ mod tests {
     fn from_frame_expands_csr_offsets_into_per_point_scans() {
         // `scan_offsets` is a CSR row pointer over 3 scans: scan 0 has two points,
         // scan 1 has none, scan 2 has one.
-        let src = crate::tsr::Frame {
+        let src = Csr {
             scan_offsets: vec![0, 2, 2, 3],
             tof_indices: vec![10, 11, 12],
             intensities: vec![100, 101, 102],
@@ -118,7 +173,7 @@ mod tests {
 
     #[test]
     fn from_frame_handles_an_empty_frame() {
-        let src = crate::tsr::Frame {
+        let src = Csr {
             scan_offsets: vec![0, 0, 0],
             ..Default::default()
         };

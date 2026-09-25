@@ -7,9 +7,8 @@ use std::path::Path;
 
 mod acquisition;
 pub(crate) mod dia;
-pub(crate) use acquisition::{
-    PrmWindows, detect as detect_acquisition, inspect as inspect_acquisition,
-};
+pub(crate) use acquisition::{detect as detect_acquisition, inspect as inspect_acquisition};
+pub use dnoise_core::windows::{DiaMs1Box, DiaWindows, FrameMeta, PasefWindow, PrmWindows};
 
 /// Byte length of the leading header in `analysis.tdf_bin` that precedes the
 /// first frame. Bruker reserves a (typically 64-byte, sometimes empty) block at
@@ -21,39 +20,6 @@ pub fn binary_header_len(tdf_path: &Path) -> Result<u64> {
         .query_row("SELECT MIN(TimsId) FROM Frames", [], |r| r.get(0))
         .optional()?;
     Ok(min.unwrap_or(0).max(0) as u64)
-}
-
-/// Minimal per-frame metadata read from the `Frames` table, ordered by `Id`
-/// (which matches timsrust's frame index). Used to detect empty frames, which
-/// timsrust cannot read.
-pub struct FrameMeta {
-    pub id: usize,
-    pub num_scans: usize,
-    pub num_peaks: u64,
-    /// Bruker `MsMsType`: 0 = MS1; 8 = ddaPASEF, 9 = diaPASEF, 10 = prm-PASEF.
-    pub ms_ms_type: i64,
-    /// Retention time in **seconds** (`Frames.Time`). Used by the RT crop.
-    pub rt: f64,
-}
-
-impl FrameMeta {
-    /// True for an MS1 frame (`MsMsType == 0`).
-    pub fn is_ms1(&self) -> bool {
-        self.ms_ms_type == 0
-    }
-}
-
-/// One ddaPASEF MS/MS isolation event: in `frame`, scans `[scan_begin, scan_end)`
-/// were isolated and fragmented for `precursor`.
-pub struct PasefWindow {
-    /// Frame `Id` (matches `Frames.Id`).
-    pub frame: usize,
-    /// First scan of the isolation window (inclusive).
-    pub scan_begin: u32,
-    /// Last scan of the isolation window (exclusive).
-    pub scan_end: u32,
-    /// Precursor `Id`.
-    pub precursor: u32,
 }
 
 /// Read every `PasefFrameMsMsInfo` row (ddaPASEF). Empty for non-DDA data —
@@ -85,66 +51,6 @@ pub fn read_pasef_msms(tdf_path: &Path) -> Result<Vec<PasefWindow>> {
         })
     })?;
     Ok(rows.collect::<std::result::Result<_, rusqlite::Error>>()?)
-}
-
-/// diaPASEF isolation-window scheme: every MS/MS frame belongs to one
-/// `WindowGroup`, and each group defines a set of mobility-scan intervals
-/// `[ScanNumBegin, ScanNumEnd)` over which the quadrupole isolated a precursor
-/// m/z band. Signal outside every interval was never isolated, and signal in two
-/// different intervals comes from unrelated isolation events — so the per-window
-/// MS/MS filter ([`crate::dia_window`]) uses these intervals both to drop
-/// out-of-window points and to filter each window independently (no cross-talk).
-///
-/// [`DiaWindows::from_pasef`] builds the same per-frame interval map from
-/// ddaPASEF isolation events, so the out-of-window gate serves both acquisitions.
-#[derive(Debug, Default)]
-pub struct DiaWindows {
-    /// `Frames.Id` -> sorted, non-overlapping `[scan_begin, scan_end)` intervals.
-    frame_intervals: HashMap<usize, Vec<(u32, u32)>>,
-}
-
-impl DiaWindows {
-    /// True when no diaPASEF window scheme was found (e.g. ddaPASEF data, where
-    /// the `DiaFrameMsMs*` tables are absent or empty).
-    pub fn is_empty(&self) -> bool {
-        self.frame_intervals.is_empty()
-    }
-
-    /// Sorted, non-overlapping isolation-window scan intervals for one MS/MS
-    /// frame, or `None` if the frame has no window-group entry.
-    pub fn intervals(&self, frame_id: usize) -> Option<&[(u32, u32)]> {
-        self.frame_intervals.get(&frame_id).map(Vec::as_slice)
-    }
-
-    /// The same per-frame interval map built from ddaPASEF isolation events
-    /// ([`read_pasef_msms`]) instead of a diaPASEF window scheme, so the same
-    /// out-of-window gate serves both acquisitions. Events are sorted per frame
-    /// and merged where they touch or overlap, matching the contract
-    /// [`crate::dia_window::in_window_mask`] requires. Empty input (diaPASEF,
-    /// non-PASEF) yields an empty map, which callers treat as "no gate".
-    pub fn from_pasef(windows: &[PasefWindow]) -> Self {
-        let mut frame_intervals: HashMap<usize, Vec<(u32, u32)>> = HashMap::new();
-        for w in windows {
-            if w.scan_end > w.scan_begin {
-                frame_intervals
-                    .entry(w.frame)
-                    .or_default()
-                    .push((w.scan_begin, w.scan_end));
-            }
-        }
-        for v in frame_intervals.values_mut() {
-            v.sort_unstable();
-            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(v.len());
-            for &(sb, se) in v.iter() {
-                match merged.last_mut() {
-                    Some(last) if sb <= last.1 => last.1 = last.1.max(se),
-                    _ => merged.push((sb, se)),
-                }
-            }
-            *v = merged;
-        }
-        DiaWindows { frame_intervals }
-    }
 }
 
 /// Read the diaPASEF isolation-window scheme by joining `DiaFrameMsMsInfo`
@@ -212,22 +118,7 @@ pub fn read_dia_windows(tdf_path: &Path) -> Result<DiaWindows> {
         }
     }
 
-    Ok(DiaWindows { frame_intervals })
-}
-
-/// One diaPASEF isolation window as a 2-D precursor-space box: an m/z band over a
-/// mobility-scan interval. Used by the MS1 out-of-window gate ([`crate::dia_ms1`]),
-/// which (unlike the MS/MS scan gate) needs the m/z extent too.
-#[derive(Debug, Clone, Copy)]
-pub struct DiaMs1Box {
-    /// First mobility scan of the window (inclusive).
-    pub scan_begin: u32,
-    /// Last mobility scan of the window (exclusive, as stored).
-    pub scan_end: u32,
-    /// Low m/z edge (`IsolationMz - IsolationWidth/2`).
-    pub mz_lo: f64,
-    /// High m/z edge (`IsolationMz + IsolationWidth/2`).
-    pub mz_hi: f64,
+    Ok(DiaWindows::from_frame_intervals(frame_intervals))
 }
 
 /// Read the distinct diaPASEF isolation windows as 2-D `(scan, m/z)` boxes — the

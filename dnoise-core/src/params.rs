@@ -484,8 +484,8 @@ impl Default for NeighborParams {
 }
 
 /// Optional pipeline stages layered on top of the core vertical-IM filter
-/// ([`FilterParams`]), passed as one value to [`crate::denoise`] and
-/// [`crate::denoise_with_progress`] instead of a dozen positional arguments.
+/// ([`FilterParams`]), passed as one value to the `dnoise` crate's `denoise` and
+/// `denoise_with_progress` (and to [`crate::Denoiser`]) instead of a dozen positional arguments.
 ///
 /// Every field is disabled by default ([`Stages::default`]): the bools are
 /// `false`, `frame_half_width` is `0` (off), and the `Option` stages are `None`.

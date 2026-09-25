@@ -103,3 +103,16 @@ pub enum DecodeError {
     #[error("zstd decompression failed: {0}")]
     Zstd(#[source] std::io::Error),
 }
+
+impl From<dnoise_core::Error> for DnoiseError {
+    fn from(e: dnoise_core::Error) -> Self {
+        match e {
+            dnoise_core::Error::InvalidInput(m) => Self::InvalidInput(m),
+            dnoise_core::Error::FrameRead { index, message } => Self::FrameRead { index, message },
+            dnoise_core::Error::Cancelled => Self::Cancelled,
+            // `dnoise_core::Error` is non-exhaustive; future variants carry
+            // their message as invalid input.
+            other => Self::InvalidInput(other.to_string()),
+        }
+    }
+}

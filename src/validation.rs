@@ -219,40 +219,8 @@ pub fn parameters(
             "frame batch size must be positive".into(),
         ));
     }
+    dnoise_core::pipeline::validate(params, stages)?;
     let invalid = |message: &str| DnoiseError::InvalidInput(message.into());
-    if !stages.neighbors.max_rt_gap_seconds.is_finite()
-        || stages.neighbors.max_rt_gap_seconds <= 0.0
-    {
-        return Err(invalid(
-            "neighbor_max_rt_gap must be finite and positive (seconds)",
-        ));
-    }
-    if params.max_internal_gap == usize::MAX {
-        return Err(invalid("max_internal_gap is too large"));
-    }
-    if stages.watershed.is_some() && stages.box_centroid.is_some() {
-        return Err(invalid("choose only one centroider"));
-    }
-    if let Some(h) = stages.halo {
-        if !h.peak_fraction.is_finite()
-            || !(0.0..=1.0).contains(&h.peak_fraction)
-            || h.scan_half_width > i64::MAX as usize
-        {
-            return Err(invalid(
-                "halo fraction must be finite in [0,1], with a valid scan width",
-            ));
-        }
-    }
-    for (mz, im) in stages
-        .ms1_polygon
-        .map(|p| (p.mz_pad, p.im_pad))
-        .into_iter()
-        .chain(stages.dia_ms1.map(|p| (p.mz_pad, p.im_pad)))
-    {
-        if !mz.is_finite() || !im.is_finite() || mz < 0.0 || im < 0.0 {
-            return Err(invalid("gate padding must be finite and nonnegative"));
-        }
-    }
     if options.crop_only && options.crop.is_none_or(|c| c.is_empty()) {
         return Err(invalid("crop-only requires at least one crop bound"));
     }

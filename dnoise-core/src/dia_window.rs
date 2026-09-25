@@ -2,7 +2,7 @@
 //!
 //! In diaPASEF the quadrupole steps through a set of `(mobility, m/z)` isolation
 //! windows per cycle; each window occupies a contiguous mobility-scan interval
-//! `[begin, end)` (read from `DiaFrameMsMsWindows`, see [`crate::tdf`]). Two things
+//! `[begin, end)` (read from `DiaFrameMsMsWindows`, see [`crate::windows`]). Two things
 //! follow that the whole-frame MS1 filter cannot see:
 //!
 //! 1. **Out-of-window signal.** Points whose scan falls in no window were never
@@ -20,7 +20,7 @@ use crate::params::{FilterParams, HaloParams};
 
 /// Keep mask (in `scans` order) selecting points whose scan lies inside any
 /// `[begin - scan_pad, end + scan_pad)` interval. `intervals` must be sorted by
-/// `begin` and non-overlapping (as produced by [`crate::tdf::read_dia_windows`]);
+/// `begin` and non-overlapping (as held by [`crate::windows::DiaWindows`]);
 /// an empty list keeps nothing. `scan_pad` widens each window symmetrically to
 /// tolerate signal a few scans past an isolation edge.
 pub fn in_window_mask(scans: &[u32], intervals: &[(u32, u32)], scan_pad: u32) -> Vec<bool> {

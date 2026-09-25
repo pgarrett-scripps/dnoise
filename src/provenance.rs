@@ -9,29 +9,7 @@ pub const FILE_NAME: &str = "dnoise.provenance.json";
 /// Executable settings for the latest operation (when the config feature is enabled).
 pub const CONFIG_NAME: &str = "dnoise.config.toml";
 
-/// Actual temporal evidence for nonempty central events in processed frames.
-/// A neighbor is counted only if it supplies points inside the matching event;
-/// the central observation is excluded. Counts include repeated uses across events.
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
-pub struct NeighborUsage {
-    /// Nonempty central events evaluated with temporal support enabled.
-    pub events: u64,
-    /// Evaluated events receiving no points from other observations.
-    pub events_without_neighbors: u64,
-    /// Total contributing neighbor observations across evaluated events.
-    pub neighbors_used: u64,
-    /// Largest contributing-neighbor count for one event.
-    pub max_neighbors_used: u64,
-}
-
-impl NeighborUsage {
-    pub(crate) fn add(&mut self, other: Self) {
-        self.events += other.events;
-        self.events_without_neighbors += other.events_without_neighbors;
-        self.neighbors_used += other.neighbors_used;
-        self.max_neighbors_used = self.max_neighbors_used.max(other.max_neighbors_used);
-    }
-}
+pub use dnoise_core::neighbor::NeighborUsage;
 
 /// Which requested geometry gates found geometry in this acquisition.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]

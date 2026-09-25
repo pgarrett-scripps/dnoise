@@ -1,7 +1,7 @@
 //! Parity test for the streaming API ([`dnoise::RunContext`]).
 //!
 //! The file writer ([`dnoise::denoise`]) and the streaming context share the same
-//! per-frame core ([`dnoise::process_frame_decoded`]); the only thing that could
+//! per-frame core ([`dnoise::Denoiser::process`]); the only thing that could
 //! drift is the per-run gate *wiring* each assembles. This test denoises a real
 //! `.d` with the writer, reads the survivors back out of the written `.d` (via the
 //! same timsrust decode dnoise trusts), and asserts they match — frame by frame —

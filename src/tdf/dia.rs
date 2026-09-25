@@ -1,61 +1,10 @@
 //! Checked DIA filter regions. Static windows stay separate; consecutive
 //! one-scan, overlapping quadrupole steps form a monotonic scanning region.
 use crate::{DnoiseError, Result};
+use dnoise_core::windows::{DiaIsolationWindow as Window, DiaRegions};
 use rusqlite::{Connection, OpenFlags};
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path};
 
-pub(crate) struct DiaRegion {
-    pub begin: u32,
-    pub end: u32,
-    // Complete scan-dependent geometry, used for exact neighbor matching.
-    pub signature: Arc<[u64]>,
-    pub scan_varying: bool,
-}
-#[derive(Default)]
-pub(crate) struct DiaRegions {
-    pub groups: HashMap<i64, Vec<DiaRegion>>,
-    pub frames: HashMap<usize, i64>,
-    intervals: HashMap<i64, Vec<(u32, u32)>>,
-}
-impl DiaRegions {
-    pub fn intervals(&self, frame: usize) -> Option<&[(u32, u32)]> {
-        self.frames
-            .get(&frame)
-            .and_then(|g| self.intervals.get(g))
-            .map(Vec::as_slice)
-    }
-    pub fn has_scanning(&self) -> bool {
-        self.groups.values().flatten().any(|r| r.scan_varying)
-    }
-}
-struct Window {
-    begin: u32,
-    end: u32,
-    mz: f64,
-    width: f64,
-    energy: f64,
-}
-impl Window {
-    fn signature(&self) -> [u64; 5] {
-        [
-            self.begin as u64,
-            self.end as u64,
-            self.mz.to_bits(),
-            self.width.to_bits(),
-            self.energy.to_bits(),
-        ]
-    }
-    fn joins(&self, next: &Self, direction: f64) -> bool {
-        let delta = next.mz - self.mz;
-        self.end - self.begin == 1
-            && next.end - next.begin == 1
-            && self.end == next.begin
-            && (self.width - next.width).abs() <= 1e-9 * self.width.max(1.0)
-            && delta != 0.0
-            && (direction == 0.0 || delta.signum() == direction)
-            && delta.abs() < (self.width + next.width) * 0.5
-    }
-}
 fn invalid(s: impl Into<String>) -> DnoiseError {
     DnoiseError::InvalidInput(format!("invalid DIA geometry: {}", s.into()))
 }
@@ -99,34 +48,7 @@ pub(crate) fn read(path: &Path) -> Result<DiaRegions> {
             energy,
         });
     }
-    let mut result = DiaRegions::default();
-    for (group, windows) in grouped {
-        let mut regions = Vec::new();
-        let mut start = 0;
-        while start < windows.len() {
-            let mut end = start + 1;
-            let mut direction = 0.0;
-            while end < windows.len() && windows[end - 1].joins(&windows[end], direction) {
-                direction = (windows[end].mz - windows[end - 1].mz).signum();
-                end += 1;
-            }
-            let signature: Vec<_> = windows[start..end]
-                .iter()
-                .flat_map(Window::signature)
-                .collect();
-            regions.push(DiaRegion {
-                begin: windows[start].begin,
-                end: windows[end - 1].end,
-                signature: signature.into(),
-                scan_varying: end - start > 1,
-            });
-            start = end;
-        }
-        result
-            .intervals
-            .insert(group, regions.iter().map(|r| (r.begin, r.end)).collect());
-        result.groups.insert(group, regions);
-    }
+    let mut result = DiaRegions::from_groups(grouped);
     let mut stmt=db.prepare("SELECT p.Frame,p.WindowGroup,f.MsMsType,f.NumScans FROM DiaFrameMsMsInfo p LEFT JOIN Frames f ON f.Id=p.Frame ORDER BY p.Frame")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {

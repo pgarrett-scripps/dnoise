@@ -1,29 +1,21 @@
 //! Orchestration: copy the source `.d`, rewrite `analysis.tdf_bin` with filtered
 //! frames (re-encoded as type 2), and fix up the `analysis.tdf` SQLite database.
 
-use crate::box_centroid::box_centroid;
 use crate::codec::try_encode_frame_type2;
 use crate::crop::CropGate;
-use crate::dia_ms1::{DiaMs1Gate, TofScanBox};
-use crate::dia_window::{filter_per_window, in_window_mask};
+use crate::dia_ms1::DiaMs1Gate;
 use crate::error::{DnoiseError, Result};
-use crate::filter::filter_iterated;
 use crate::frame::FlatFrame;
-use crate::halo::horizontal_halo_keep_mask;
 use crate::mobility::{self, MobilityScale, ScanToMobility};
-use crate::msms::{MsmsKeep, build_msms_keep};
-use crate::neighbor::NeighborIndex;
-use crate::params::{
-    CropParams, DiaMs1WindowParams, FilterParams, HaloParams, Ms1PolygonParams, MsmsFilterParams,
-    Stages,
-};
+use crate::msms::build_msms_keep;
+use crate::neighbor;
+use crate::params::{CropParams, DiaMs1WindowParams, FilterParams, Ms1PolygonParams, Stages};
 use crate::polygon::PolygonGate;
 use crate::provenance::NeighborUsage;
-use crate::smooth::box_average;
-use crate::tdf::{self, DiaWindows, FrameUpdate, PrmWindows};
+use crate::tdf::{self, DiaWindows, FrameUpdate};
 use crate::tsr::ConvertableDomain;
 use crate::tsr::{FrameReader, MetadataReader};
-use crate::watershed::watershed_centroid;
+use dnoise_core::{DecodedFrame, Denoiser};
 use rayon::prelude::*;
 use std::fs;
 use std::io::{BufWriter, Read, Write};
@@ -35,10 +27,6 @@ use tracing::{debug, info, warn};
 /// batch is written sequentially (so offsets stay ordered) before the next.
 /// Bounds peak memory to roughly this many encoded frames.
 const CHUNK: usize = 2048;
-
-/// Upper bound on watershed groups formed per frame — a guard against
-/// pathological frames. Real MS1 frames centroid to far fewer than this.
-const MAX_CENTROIDS: usize = 100_000;
 
 /// Summary returned by [`denoise`].
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -278,48 +266,6 @@ pub fn denoise_with_progress<F: FnMut(Progress)>(
     denoise_with_options(input, output, params, stages, &opts, progress)
 }
 
-/// The writer and streaming reader use the same acquisition policy. Targeted,
-/// mixed and unknown runs may use the MS1 filter, but never discovery geometry
-/// or the whole-frame MS/MS fallback. Cropping remains an explicit operation.
-fn acquisition_stages<'a>(
-    acquisition: crate::Acquisition,
-    stages: &Stages<'a>,
-    crop_only: bool,
-) -> Result<Stages<'a>> {
-    let mut effective = *stages;
-    if matches!(
-        acquisition,
-        crate::Acquisition::PrmPasef | crate::Acquisition::Mixed | crate::Acquisition::Unknown
-    ) {
-        if !crop_only && acquisition == crate::Acquisition::PrmPasef && stages.filter_all_frames {
-            return Err(DnoiseError::InvalidInput(
-                "--all-frames (filter_all_frames) is unsupported for prm-PASEF; use --denoise-msms for experimental per-event fragment filtering".into()
-            ));
-        }
-        if !crop_only
-            && acquisition != crate::Acquisition::PrmPasef
-            && (stages.denoise_msms.is_some() || stages.filter_all_frames)
-        {
-            return Err(DnoiseError::InvalidInput(format!(
-                "MS/MS denoising is not supported for {acquisition}; use MS1-only processing (disable denoise_msms and filter_all_frames)"
-            )));
-        }
-        if crop_only || acquisition != crate::Acquisition::PrmPasef {
-            effective.denoise_msms = None;
-        }
-        effective.filter_all_frames = false;
-        effective.ms1_polygon = None;
-        effective.dia_ms1 = None;
-        effective.dia_window = None;
-        effective.dda_window = None;
-        effective.dia_per_window = false;
-    }
-    if acquisition == crate::Acquisition::DiaPasef && stages.neighbors.dia_radius > 0 {
-        effective.dia_per_window = true;
-    }
-    Ok(effective)
-}
-
 /// The full pipeline behind every public entry point. Reads the input `.d`, builds
 /// the per-run gates (including the crop), filters + crops each frame in parallel
 /// chunks, and — unless `options.dry_run` — writes the rewritten `analysis.tdf_bin`
@@ -356,7 +302,10 @@ fn run<F: FnMut(Progress)>(
     let scheme = acquisition.kind;
     let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
     let n_frames = reader.len();
-    let effective_stages = acquisition_stages(scheme, stages, crop_only)?;
+    // The per-frame pipeline. It applies the acquisition policy to `stages`;
+    // everything below is built from the effective stages it reports.
+    let mut denoiser = Denoiser::new(params, stages, scheme, meta.clone(), crop_only)?;
+    let effective_stages = *denoiser.stages();
     let stages = &effective_stages;
     // Unpack the stages this function builds gates from; the per-frame stages
     // (smoothing, centroiding, etc.) are forwarded to `process_frame` via `stages`.
@@ -374,7 +323,7 @@ fn run<F: FnMut(Progress)>(
     let neighbors = if crop_only {
         None
     } else {
-        NeighborIndex::build(&in_tdf, &meta, scheme, stages)?
+        neighbor::build(&in_tdf, &meta, scheme, stages)?
     };
 
     // Destination is an owned temporary directory; the transaction installs it later.
@@ -443,7 +392,6 @@ fn run<F: FnMut(Progress)>(
         }
         None => (None, None),
     };
-    let msms_ref = msms_keep.as_ref();
 
     // diaPASEF isolation windows, read once and shared. Needed by either the
     // out-of-window gate (`dia_window`) or per-window MS/MS filtering
@@ -460,7 +408,6 @@ fn run<F: FnMut(Progress)>(
     } else {
         None
     };
-    let dia_windows_ref = dia_windows.as_ref();
     let dia_regions = if scheme == crate::Acquisition::DiaPasef
         && dia_per_window
         && (denoise_msms.is_some() || stages.filter_all_frames)
@@ -490,7 +437,6 @@ fn run<F: FnMut(Progress)>(
     } else {
         None
     };
-    let dda_windows_ref = dda_windows.as_ref();
 
     // diaPASEF MS1 out-of-window gate: build the padded `(scan, TOF)` lookup once
     // from the isolation windows + calibration. `None` for ddaPASEF (no windows).
@@ -504,7 +450,6 @@ fn run<F: FnMut(Progress)>(
             None => debug!("diaPASEF MS1 gate requested but no isolation windows — skipped"),
         }
     }
-    let dia_ms1_ref = dia_ms1_gate.as_ref();
 
     // MS1 selection-polygon gate: build the per-scan TOF lookup once from the
     // run's IMS PolygonFilter + calibration. `None` when the run stores no polygon.
@@ -520,7 +465,6 @@ fn run<F: FnMut(Progress)>(
             }
         }
     }
-    let polygon_ref = polygon_gate.as_ref();
 
     // Region-of-interest crop: convert the physical `(m/z, 1/K0)` bounds to integer
     // `(TOF, scan)` once via the run calibration (RT bounds are applied per frame
@@ -558,19 +502,21 @@ fn run<F: FnMut(Progress)>(
         }
         _ => None,
     };
-    let crop_ref = crop_gate.as_ref();
 
-    // Per-frame retention-time keep mask (crop bounds are in minutes; `Frames.Time`
-    // is in seconds). Frames outside the window are emitted empty rather than
-    // deleted, so the frame axis stays valid. All-true when no RT bound is set.
-    let rt_keep: Vec<bool> = match crop {
-        Some(cp) if cp.has_rt() => {
-            let lo = cp.rt_min.map(|m| m * 60.0).unwrap_or(f64::NEG_INFINITY);
-            let hi = cp.rt_max.map(|m| m * 60.0).unwrap_or(f64::INFINITY);
-            meta.iter().map(|m| m.rt >= lo && m.rt <= hi).collect()
-        }
-        _ => vec![true; n_frames],
-    };
+    // Hand the run state to the per-frame pipeline. Frames outside the RT crop
+    // are emitted empty rather than deleted, so the frame axis stays valid.
+    denoiser.set_neighbors(neighbors);
+    denoiser.set_msms_keep(msms_keep);
+    denoiser.set_prm_windows(prm_windows);
+    denoiser.set_whole_frame_msms(dia_msms.is_some());
+    denoiser.set_dia_windows(dia_windows);
+    denoiser.set_dia_regions(dia_regions);
+    denoiser.set_dda_windows(dda_windows);
+    denoiser.set_dia_ms1_gate(dia_ms1_gate);
+    denoiser.set_polygon_gate(polygon_gate);
+    denoiser.set_crop_gate(crop_gate);
+    denoiser.set_rt_crop(crop);
+    let denoiser = denoiser;
 
     // Frames to process. In a dry run with `sample` set, this is a deterministic
     // pseudo-random subset (for a fast reduction estimate); otherwise every frame,
@@ -617,25 +563,6 @@ fn run<F: FnMut(Progress)>(
         frames_total: n_process,
     });
 
-    // Per-run context shared by every frame: the prebuilt MS/MS keep sets and
-    // gates derived above, the crop, plus compatible-observation indices. Bundling these
-    // keeps `process_frame` to a handful of arguments.
-    let ctx = FrameCtx {
-        msms: msms_ref,
-        prm_msms: denoise_msms.zip(prm_windows.as_ref()),
-        dia_msms,
-        dia_windows: dia_windows_ref,
-        dia_regions: dia_regions.as_ref(),
-        dda_windows: dda_windows_ref,
-        dia_ms1: dia_ms1_ref,
-        polygon: polygon_ref,
-        crop: crop_ref,
-        crop_only,
-        rt_keep: &rt_keep,
-        neighbors: neighbors.as_ref(),
-        cancel,
-    };
-
     let mut offset: u64 = header_len;
     let mut updates: Vec<FrameUpdate> = Vec::with_capacity(n_process);
     let mut raw_points: u64 = 0;
@@ -665,7 +592,7 @@ fn run<F: FnMut(Progress)>(
                 if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
                     return Err(DnoiseError::Cancelled);
                 }
-                process_frame(&reader, &meta, i, params, stages, &ctx)
+                process_frame(&reader, &denoiser, i, cancel)
             })
             .collect::<Result<_>>()?;
 
@@ -762,25 +689,27 @@ fn run<F: FnMut(Progress)>(
         elapsed_seconds: 0.0,
         worker_threads: rayon::current_num_threads(),
         active_gates: crate::provenance::ActiveGates {
-            ms1_neighbors: neighbors.is_some() && stages.frame_half_width > 0 && n_ms1 > 0,
-            prm_neighbors: neighbors.is_some()
+            ms1_neighbors: denoiser.neighbors().is_some()
+                && stages.frame_half_width > 0
+                && n_ms1 > 0,
+            prm_neighbors: denoiser.neighbors().is_some()
                 && stages.neighbors.prm_radius > 0
                 && scheme == crate::Acquisition::PrmPasef,
-            dia_neighbors: neighbors.is_some()
+            dia_neighbors: denoiser.neighbors().is_some()
                 && stages.neighbors.dia_radius > 0
                 && scheme == crate::Acquisition::DiaPasef,
-            dia_scan_varying: dia_regions.as_ref().is_some_and(|r| r.has_scanning()),
-            prm_per_event: prm_windows.is_some() && !crop_only,
-            ms1_polygon: polygon_ref.is_some() && !crop_only,
-            dia_ms1: dia_ms1_ref.is_some() && !crop_only,
-            dia_window: dia_windows_ref.is_some()
+            dia_scan_varying: denoiser.dia_regions().is_some_and(|r| r.has_scanning()),
+            prm_per_event: denoiser.prm_windows().is_some() && !crop_only,
+            ms1_polygon: denoiser.polygon_gate().is_some() && !crop_only,
+            dia_ms1: denoiser.dia_ms1_gate().is_some() && !crop_only,
+            dia_window: denoiser.dia_windows().is_some()
                 && dia_window.is_some()
                 && !crop_only
                 && (stages.filter_all_frames || denoise_msms.is_some()),
-            dda_window: dda_windows_ref.is_some()
+            dda_window: denoiser.dda_windows().is_some()
                 && !crop_only
                 && (stages.filter_all_frames || denoise_msms.is_some()),
-            dia_per_window: dia_windows_ref.is_some()
+            dia_per_window: denoiser.dia_windows().is_some()
                 && dia_per_window
                 && !crop_only
                 && (stages.filter_all_frames || denoise_msms.is_some()),
@@ -808,78 +737,28 @@ struct ProcessedFrame {
     cropped: bool,
 }
 
-/// Per-run context for [`process_frame`]: the MS/MS keep sets and gates built
-/// once in [`run`], plus the crop and compatible-observation indices. Lets the
-/// per-frame worker take the run's derived state as a single value.
-pub struct FrameCtx<'a> {
-    /// PRM event-local filter knobs and checked, unmerged isolation intervals.
-    prm_msms: Option<(&'a MsmsFilterParams, &'a PrmWindows)>,
-    /// ddaPASEF per-precursor keep sets (`None` unless MS/MS denoising on ddaPASEF).
-    msms: Option<&'a MsmsKeep>,
-    /// diaPASEF MS/MS filter knobs (`None` unless MS/MS denoising on diaPASEF).
-    dia_msms: Option<&'a MsmsFilterParams>,
-    /// diaPASEF isolation windows (`None` for ddaPASEF or when unused).
-    dia_windows: Option<&'a DiaWindows>,
-    /// Checked static windows and continuous scan-dependent DIA regions.
-    dia_regions: Option<&'a tdf::dia::DiaRegions>,
-    /// ddaPASEF isolation-event intervals (`None` for diaPASEF or when unused).
-    dda_windows: Option<&'a DiaWindows>,
-    /// Built diaPASEF MS1 out-of-window gate (`None` when disabled / ddaPASEF).
-    dia_ms1: Option<&'a DiaMs1Gate>,
-    /// Built MS1 selection-polygon gate (`None` when disabled or no polygon).
-    polygon: Option<&'a PolygonGate>,
-    /// Built region-of-interest crop (`None` when no point-level crop is requested).
-    crop: Option<&'a CropGate>,
-    /// Skip all denoising and apply only the crop.
-    crop_only: bool,
-    /// Per-frame retention-time keep mask (`false` = emit this frame empty).
-    rt_keep: &'a [bool],
-    /// Compatible event neighborhoods for temporal filtering evidence.
-    neighbors: Option<&'a NeighborIndex>,
-    /// Cooperative cancellation while decoding supporting observations.
-    cancel: Option<&'a std::sync::atomic::AtomicBool>,
+/// Read 0-based frame `j` for the per-frame pipeline.
+fn read_flat(reader: &FrameReader, j: usize) -> dnoise_core::Result<FlatFrame> {
+    reader
+        .get(j)
+        .map(|f| FlatFrame::from_frame(&f))
+        .map_err(|e| dnoise_core::Error::FrameRead {
+            index: j,
+            message: e.to_string(),
+        })
 }
 
-/// A frame after every denoising / crop stage has run, but *before* it is
-/// re-encoded into a `.d` record. This is the unit the streaming API
-/// ([`crate::RunContext`]) hands to in-process callers that want the surviving
-/// points directly (e.g. a feature finder) instead of a rewritten `.d` on disk.
-/// [`process_frame`] wraps this with the type-2 encoder to write the file.
-pub struct DecodedFrame {
-    /// Bruker frame `Id` (== timsrust frame index).
-    pub frame_id: usize,
-    /// True for MS1 frames.
-    pub is_ms1: bool,
-    /// Scan count for this frame (encode size; also maps scan -> mobility).
-    pub num_scans: usize,
-    /// Retention time in **seconds** (`Frames.Time`).
-    pub rt_seconds: f64,
-    /// Surviving points as integer `(scan, tof_idx, intensity)`, after every
-    /// enabled stage (vertical filter, halo, gates, smoothing, centroiding).
-    pub survivors: Vec<(u32, u32, u32)>,
-    /// Input point count before filtering, including RT-cropped frames.
-    pub raw_points: u64,
-    /// Summed decoded input intensity, including RT-cropped frames.
-    pub raw_summed: u64,
-    /// Actual temporal evidence used for this frame.
-    pub neighbor_usage: NeighborUsage,
-    /// True when this frame was emptied by the retention-time crop.
-    pub cropped: bool,
-}
-
-/// Thin file-writer wrapper over [`process_frame_decoded`]: decode the frame's
+/// Thin file-writer wrapper over [`Denoiser::process`]: decode the frame's
 /// survivors, then encode them into a `.d` type-2 record plus the per-frame stats
 /// the run's metadata fixup needs. Behaviour-identical to the pre-streaming
 /// implementation (proven by the byte-identity test in `tests/`).
 fn process_frame(
     reader: &FrameReader,
-    meta: &[tdf::FrameMeta],
+    denoiser: &Denoiser,
     i: usize,
-    params: &FilterParams,
-    stages: &Stages,
-    ctx: &FrameCtx,
+    cancel: Option<&AtomicBool>,
 ) -> Result<ProcessedFrame> {
-    let d = process_frame_decoded(reader, meta, i, params, stages, ctx)?;
+    let d = denoiser.process(i, &|j| read_flat(reader, j), cancel)?;
     let num_peaks = d.survivors.len() as u64;
     let summed_intensities: u64 = d.survivors.iter().map(|&(_, _, it)| it as u64).sum();
     let max_intensity = d.survivors.iter().map(|&(_, _, it)| it).max().unwrap_or(0);
@@ -895,320 +774,6 @@ fn process_frame(
         raw_summed: d.raw_summed,
         is_ms1: d.is_ms1,
         cropped: d.cropped,
-    })
-}
-
-/// Decode one frame through every enabled denoising / crop stage and return its
-/// surviving points, without touching the output `.d`. This is the shared core
-/// behind both the file writer ([`process_frame`]) and the streaming API
-/// ([`crate::RunContext::process`]) — a single implementation, so an in-process
-/// caller can never drift from the standalone tool.
-pub fn process_frame_decoded(
-    reader: &FrameReader,
-    meta: &[tdf::FrameMeta],
-    i: usize,
-    params: &FilterParams,
-    stages: &Stages,
-    ctx: &FrameCtx,
-) -> Result<DecodedFrame> {
-    // The stages that act per frame; the polygon/dia_ms1/denoise_msms knobs were
-    // already consumed into the gates and keep sets held by `ctx`.
-    let &Stages {
-        filter_all_frames,
-        halo,
-        smooth,
-        watershed,
-        box_centroid: box_centroid_params,
-        dia_window,
-        dda_window,
-        dia_per_window,
-        ..
-    } = stages;
-    let &FrameCtx {
-        prm_msms,
-        msms,
-        dia_msms,
-        dia_windows,
-        dia_regions,
-        dda_windows,
-        dia_ms1,
-        polygon,
-        crop,
-        crop_only,
-        rt_keep,
-        neighbors,
-        cancel,
-    } = ctx;
-    let meta_i = &meta[i];
-    let is_ms1 = meta_i.is_ms1();
-    // Empty input frames are not read through timsrust, which cannot decode an
-    // absent payload. They are still WRITTEN the long way (an all-zero scan
-    // table, ~24 compressed bytes) so the output stays readable by timsrust;
-    // see `codec::encode_empty_frame_type2`.
-    if meta_i.num_peaks == 0 {
-        return Ok(DecodedFrame {
-            frame_id: meta_i.id,
-            is_ms1,
-            num_scans: meta_i.num_scans,
-            rt_seconds: meta_i.rt,
-            survivors: Vec::new(),
-            raw_points: 0,
-            raw_summed: 0,
-            neighbor_usage: NeighborUsage::default(),
-            cropped: false,
-        });
-    }
-
-    let frame = reader.get(i).map_err(|e| DnoiseError::FrameRead {
-        index: i,
-        message: e.to_string(),
-    })?;
-    let flat = FlatFrame::from_frame(&frame);
-    let raw_points = flat.len() as u64;
-    let raw_summed: u64 = flat.intensity.iter().map(|&it| it as u64).sum();
-    let num_scans = flat.num_scans;
-    let frame_id = flat.frame_id;
-
-    // Decode RT-excluded frames too: QC denominators must include removed intensity.
-    if !rt_keep[i] {
-        return Ok(DecodedFrame {
-            frame_id: meta_i.id,
-            is_ms1,
-            num_scans: meta_i.num_scans,
-            rt_seconds: meta_i.rt,
-            survivors: Vec::new(),
-            raw_points,
-            raw_summed,
-            neighbor_usage: NeighborUsage::default(),
-            cropped: true,
-        });
-    }
-
-    // Sum compatible local observations only to decide which native points survive.
-    let neighbor_params = if is_ms1 {
-        *params
-    } else {
-        stages
-            .denoise_msms
-            .map(|p| p.as_filter_params())
-            .unwrap_or(*params)
-    };
-    let neighborhood_mask = match neighbors.filter(|_| !crop_only) {
-        Some(n) => n.keep_mask(
-            reader,
-            meta,
-            i,
-            &flat,
-            &neighbor_params,
-            halo,
-            rt_keep,
-            cancel,
-        )?,
-        None => None,
-    };
-    let (neighborhood_mask, neighbor_usage) = match neighborhood_mask {
-        Some((mask, usage)) => (Some(mask), usage),
-        None => (None, NeighborUsage::default()),
-    };
-    let to_filter: &FlatFrame = &flat;
-
-    // diaPASEF isolation-window scan intervals for this frame (None for MS1, for
-    // ddaPASEF, or when neither DIA feature is enabled). Drives both per-window
-    // MS/MS filtering and the out-of-window gate below.
-    let dia_iv = dia_regions
-        .and_then(|r| r.intervals(meta_i.id))
-        .or_else(|| dia_windows.and_then(|dw| dw.intervals(meta_i.id)));
-
-    // MS1 frames: vertical filter then (optional) horizontal-halo on the survivors.
-    // MS/MS frames: pruned by the precursor keep sets when MS/MS denoising is on,
-    // otherwise re-encoded unchanged (or vertical-filtered if `filter_all_frames`).
-    // In `crop_only` mode no denoising runs at all — every point survives to the
-    // crop below, which is the sole filter.
-    let mut keep = if crop_only {
-        vec![true; to_filter.len()]
-    } else if meta_i.is_ms1() {
-        let mut keep = if let Some(mask) = neighborhood_mask {
-            mask
-        } else {
-            let mut keep = filter_iterated(to_filter, params);
-            if let Some(hp) = halo {
-                apply_halo(to_filter, hp, &mut keep);
-            }
-            keep
-        };
-        // diaPASEF MS1 out-of-window gate: drop surviving points whose (scan, TOF)
-        // is in no padded isolation window. Composes as an AND on the keep mask.
-        if let Some(gate) = dia_ms1 {
-            let mut mask = gate.keep_mask(&to_filter.scan, &to_filter.tof);
-            if gate.overlap {
-                mask = overlap_mask(to_filter, &keep, &mask, params);
-            }
-            for (slot, in_win) in keep.iter_mut().zip(mask) {
-                *slot &= in_win;
-            }
-        }
-        // MS1 selection-polygon gate: drop surviving points outside the run's IMS
-        // PolygonFilter region (never-selected precursor space). Also ANDed in.
-        if let Some(gate) = polygon {
-            let mut mask = gate.keep_mask(&to_filter.scan, &to_filter.tof);
-            if gate.overlap {
-                mask = overlap_mask(to_filter, &keep, &mask, params);
-            }
-            for (slot, inside) in keep.iter_mut().zip(mask) {
-                *slot &= inside;
-            }
-        }
-        keep
-    } else if let Some(mask) = neighborhood_mask {
-        mask
-    } else if let Some((mp, windows)) = prm_msms {
-        let intervals = windows.get(&meta_i.id).ok_or_else(|| {
-            DnoiseError::InvalidInput(format!(
-                "nonempty PRM frame {} has no checked isolation events",
-                meta_i.id
-            ))
-        })?;
-        filter_per_window(to_filter, intervals, &mp.as_filter_params(), halo)
-    } else if let Some(mk) = msms {
-        mk.keep_mask(to_filter, meta_i.id)
-    } else if let Some(mp) = dia_msms {
-        // diaPASEF MS/MS: run the same MS/MS filter on each whole frame. With
-        // `dia_per_window`, filter each isolation window's scan slice on its own
-        // instead, so a mobility run cannot be fused across a window boundary
-        // (cross-talk between unrelated isolation events). Temporal support, when
-        // enabled, has already supplied the mask above; the `msms_*` knobs apply via
-        // FilterParams just like the ddaPASEF path.
-        let fp = mp.as_filter_params();
-        match dia_iv {
-            Some(iv) if dia_per_window => filter_per_window(to_filter, iv, &fp, halo),
-            _ => {
-                let mut keep = filter_iterated(to_filter, &fp);
-                if let Some(hp) = halo {
-                    apply_halo(to_filter, hp, &mut keep);
-                }
-                keep
-            }
-        }
-    } else if filter_all_frames {
-        match dia_iv {
-            Some(iv) if dia_per_window => filter_per_window(to_filter, iv, params, halo),
-            _ => {
-                let mut keep = filter_iterated(to_filter, params);
-                if let Some(hp) = halo {
-                    apply_halo(to_filter, hp, &mut keep);
-                }
-                keep
-            }
-        }
-    } else {
-        vec![true; to_filter.len()]
-    };
-
-    // Out-of-window gate: drop any MS/MS point whose scan falls outside every
-    // isolation window for this frame. Independent of the streak filter, so it
-    // also trims mobility-edge noise when no MS/MS filtering runs. (Per-window
-    // filtering already excludes these points, making this a no-op there.)
-    if !crop_only {
-        if let (Some(dp), Some(iv)) = (dia_window, dia_iv) {
-            let mask = in_window_mask(&to_filter.scan, iv, dp.scan_pad);
-            for (slot, keep_pt) in keep.iter_mut().zip(mask) {
-                *slot &= keep_pt;
-            }
-        }
-        // The ddaPASEF twin of the gate above, driven by PasefFrameMsMsInfo
-        // isolation events. Standard timsTOF ddaPASEF files record no
-        // out-of-event scans, so this is expected to change nothing there; it
-        // enforces the invariant rather than trusting the acquisition.
-        let dda_iv = dda_windows.and_then(|w| w.intervals(meta_i.id));
-        if let (Some(dp), Some(iv)) = (dda_window, dda_iv) {
-            let mask = in_window_mask(&to_filter.scan, iv, dp.scan_pad);
-            for (slot, keep_pt) in keep.iter_mut().zip(mask) {
-                *slot &= keep_pt;
-            }
-        }
-    }
-
-    // Region-of-interest crop: AND the `(m/z, 1/K0, intensity)` box into the keep
-    // mask. Applies to every frame regardless of MS level (a subset of the raw
-    // acquisition), and is the only active filter under `crop_only`.
-    if let Some(cg) = crop {
-        cg.apply(
-            &to_filter.scan,
-            &to_filter.tof,
-            &to_filter.intensity,
-            &mut keep,
-        );
-    }
-
-    let survivors = to_filter.survivors(&keep);
-
-    // Optional intensity smoothing then watershed centroiding, both applied only
-    // to frames the vertical filter actually processed — MS1 always, MS/MS only
-    // under `filter_all_frames` (and never on the separate per-precursor MS/MS-
-    // denoise path, which has its own keep logic). Smoothing runs first so the
-    // watershed seeds on the stabilised intensities.
-    let filtered_here = !crop_only
-        && (meta_i.is_ms1() || dia_msms.is_some() || (msms.is_none() && filter_all_frames));
-    // PRM postprocessing stays inside each event as well: smoothing and
-    // centroiding must not mix adjacent targets after the keep mask is built.
-    let finish = |points: Vec<(u32, u32, u32)>| {
-        let points = match smooth {
-            Some(sp) => box_average(&points, num_scans, sp),
-            None => points,
-        };
-        let points = match watershed {
-            Some(wp) => watershed_centroid(&points, wp, MAX_CENTROIDS),
-            None => points,
-        };
-        match box_centroid_params {
-            Some(bp) => box_centroid(&points, bp),
-            None => points,
-        }
-    };
-    let postprocess_intervals = if !crop_only && !is_ms1 {
-        neighbors
-            .map(|n| n.intervals(i))
-            .filter(|iv| !iv.is_empty())
-            .or_else(|| {
-                dia_regions
-                    .and_then(|r| r.intervals(meta_i.id))
-                    .map(|iv| iv.to_vec())
-            })
-            .or_else(|| prm_msms.map(|(_, w)| w[&meta_i.id].clone()))
-    } else {
-        None
-    };
-    let survivors = if let Some(intervals) = postprocess_intervals
-        .filter(|_| smooth.is_some() || watershed.is_some() || box_centroid_params.is_some())
-    {
-        intervals
-            .iter()
-            .flat_map(|&(begin, end)| {
-                finish(
-                    survivors
-                        .iter()
-                        .copied()
-                        .filter(|p| p.0 >= begin && p.0 < end)
-                        .collect(),
-                )
-            })
-            .collect()
-    } else if filtered_here {
-        finish(survivors)
-    } else {
-        survivors
-    };
-
-    Ok(DecodedFrame {
-        frame_id,
-        is_ms1,
-        num_scans,
-        rt_seconds: meta_i.rt,
-        survivors,
-        raw_points,
-        raw_summed,
-        neighbor_usage,
-        cropped: false,
     })
 }
 
@@ -1252,92 +817,10 @@ fn build_dia_ms1_gate(
         return Ok(None);
     }
     let im = mobility::load(in_tdf, scale, md.im_converter)?;
-
     let mz_to_tof = |mz: f64| md.mz_converter.invert(mz);
-    let tof_boxes: Vec<TofScanBox> = boxes
-        .iter()
-        .map(|b| dia_ms1_box(b, p, mz_to_tof, &im, num_scans))
-        .collect();
-
-    Ok(DiaMs1Gate::build(&tof_boxes, num_scans).map(|mut g| {
-        g.overlap = p.overlap;
-        g
-    }))
-}
-
-/// One diaPASEF isolation window as a padded integer `(scan, TOF)` box: the m/z
-/// band widened by `mz_pad` Th on each side (TOF edges rounded outward) and the
-/// scan interval widened by `im_pad` 1/K0 ([`window_scans`]). A window is a
-/// rectangle in `(m/z, scan)`, so the padded box is exactly the window's
-/// Minkowski sum with the pad rectangle: every scan within `im_pad` of the window
-/// gets the full padded m/z band.
-fn dia_ms1_box(
-    b: &tdf::DiaMs1Box,
-    p: &DiaMs1WindowParams,
-    mz_to_tof: impl Fn(f64) -> f64,
-    im: &ScanToMobility,
-    num_scans: usize,
-) -> TofScanBox {
-    // m/z edges -> TOF indices (monotonic), padded by mz_pad on each side.
-    let t0 = mz_to_tof(b.mz_lo - p.mz_pad);
-    let t1 = mz_to_tof(b.mz_hi + p.mz_pad);
-    let tof_lo = t0.min(t1).floor().max(0.0) as u32;
-    let tof_hi = t1.max(t0).ceil().max(0.0) as u32;
-    let (scan_lo, scan_hi) = window_scans(b.scan_begin, b.scan_end, p.im_pad, im, num_scans);
-    TofScanBox {
-        scan_lo,
-        scan_hi,
-        tof_lo,
-        tof_hi,
-    }
-}
-
-/// Inclusive scan range of a `[scan_begin, scan_end)` isolation window, padded by
-/// `im_pad` in 1/K0. With no pad the window's own scans are returned exactly;
-/// otherwise the edges go scan -> 1/K0 -> padded -> scan, taking min/max so the
-/// result is right for either conversion direction. A padded window is rounded
-/// outward; the rounding tolerance keeps float noise in the round trip from
-/// adding a scan at either edge.
-fn window_scans(
-    scan_begin: u32,
-    scan_end: u32,
-    im_pad: f64,
-    im: &ScanToMobility,
-    num_scans: usize,
-) -> (u32, u32) {
-    const EPS: f64 = 1e-3; // scans: far above round-trip noise, far below one scan
-    let last = num_scans.saturating_sub(1) as u32;
-    let first_in = scan_begin;
-    let last_in = scan_end.saturating_sub(1).max(scan_begin);
-    if im_pad <= 0.0 {
-        return (first_in.min(last), last_in.min(last));
-    }
-    let im0 = im.convert(first_in.into());
-    let im1 = im.convert(last_in.into());
-    let s0 = im.invert(im0.max(im1) + im_pad);
-    let s1 = im.invert(im0.min(im1) - im_pad);
-    let lo = (s0.min(s1) + EPS).floor().max(0.0) as u32;
-    let hi = ((s0.max(s1) - EPS).ceil().max(0.0) as u32).min(last);
-    (lo.min(hi), hi)
-}
-
-/// Feature-level gate mask: link surviving points with the streak filter's own
-/// adjacency (column half-width, bridged gap + 1) and keep features that touch
-/// the gate anywhere, over their whole extent. See [`crate::overlap`].
-fn overlap_mask(
-    frame: &FlatFrame,
-    keep: &[bool],
-    inside: &[bool],
-    params: &FilterParams,
-) -> Vec<bool> {
-    crate::overlap::extend_to_features(
-        &frame.scan,
-        &frame.tof,
-        keep,
-        inside,
-        params.mz_half_width,
-        params.max_internal_gap as u32 + 1,
-    )
+    Ok(DiaMs1Gate::from_windows(
+        &boxes, p, mz_to_tof, &im, num_scans,
+    ))
 }
 
 /// Build the MS1 selection-polygon gate: read the run's IMS PolygonFilter
@@ -1399,26 +882,6 @@ fn build_polygon_gate(
         })?;
     gate.overlap = p.overlap;
     Ok(Some(gate))
-}
-
-/// Run the horizontal-halo filter on the currently-kept points of `frame` and
-/// turn off `keep` for any the filter removes. Operates in integer
-/// `(scan, TOF index)` space — no calibration needed.
-fn apply_halo(frame: &FlatFrame, hp: &HaloParams, keep: &mut [bool]) {
-    let idx: Vec<usize> = (0..frame.len()).filter(|&i| keep[i]).collect();
-    if idx.is_empty() {
-        return;
-    }
-    let scan: Vec<u32> = idx.iter().map(|&i| frame.scan[i]).collect();
-    let tof: Vec<u32> = idx.iter().map(|&i| frame.tof[i]).collect();
-    let inten: Vec<u32> = idx.iter().map(|&i| frame.intensity[i]).collect();
-
-    let hmask = horizontal_halo_keep_mask(&scan, &tof, &inten, frame.num_scans, hp);
-    for (k, &i) in idx.iter().enumerate() {
-        if !hmask[k] {
-            keep[i] = false;
-        }
-    }
 }
 
 /// Recursively copy `src` into `dst`, skipping a top-level entry named `skip_top`.
@@ -1490,7 +953,7 @@ impl Calibration {
 /// In-process streaming denoiser: open a `.d` once, build the run's gates, and
 /// hand back each frame's surviving points via [`RunContext::process`] — the
 /// exact stage code the standalone tool runs (both go through
-/// [`process_frame_decoded`]), with no rewritten `.d` on disk.
+/// [`Denoiser::process`]), with no rewritten `.d` on disk.
 ///
 /// The caller drives parallelism, e.g.
 /// ```ignore
@@ -1503,23 +966,11 @@ impl Calibration {
 /// ```
 ///
 /// This is the non-crop, non-dry-run path (crop/RT-crop belong to the file
-/// writer). The per-run gate wiring mirrors [`run`]; the [`streaming_matches_writer`]
+/// writer). The per-run gate wiring mirrors [`run`]; the `streaming_matches_writer`
 /// test asserts the two never diverge on a real `.d`.
 pub struct RunContext<'a> {
     reader: FrameReader,
-    meta: Vec<tdf::FrameMeta>,
-    params: FilterParams,
-    stages: Stages<'a>,
-    msms_keep: Option<MsmsKeep>,
-    prm_windows: Option<PrmWindows>,
-    dia_msms: Option<&'a MsmsFilterParams>,
-    dia_windows: Option<DiaWindows>,
-    dia_regions: Option<tdf::dia::DiaRegions>,
-    dda_windows: Option<DiaWindows>,
-    dia_ms1_gate: Option<DiaMs1Gate>,
-    polygon_gate: Option<PolygonGate>,
-    rt_keep: Vec<bool>,
-    neighbors: Option<NeighborIndex>,
+    denoiser: Denoiser<'a>,
     calibration: Calibration,
     n_ms1: usize,
 }
@@ -1539,12 +990,12 @@ impl<'a> RunContext<'a> {
         let acquisition = tdf::inspect_acquisition(&in_tdf, &meta)?;
         let scheme = acquisition.kind;
         let reader = FrameReader::new(input).map_err(|e| DnoiseError::OpenFrames(e.to_string()))?;
-        let effective_stages = acquisition_stages(scheme, stages, false)?;
+        let mut denoiser = Denoiser::new(params, stages, scheme, meta.clone(), false)?;
+        let effective_stages = *denoiser.stages();
         let stages = &effective_stages;
-        let n_frames = meta.len();
         let n_ms1 = meta.iter().filter(|m| m.is_ms1()).count();
 
-        let neighbors = NeighborIndex::build(&in_tdf, &meta, scheme, stages)?;
+        let neighbors = neighbor::build(&in_tdf, &meta, scheme, stages)?;
 
         // MS/MS denoise: ddaPASEF per-precursor keep sets vs diaPASEF whole-frame.
         let prm_windows = (scheme == crate::Acquisition::PrmPasef && stages.denoise_msms.is_some())
@@ -1600,7 +1051,15 @@ impl<'a> RunContext<'a> {
         };
 
         // No crop on the streaming path: every frame is in the RT window.
-        let rt_keep = vec![true; n_frames];
+        denoiser.set_neighbors(neighbors);
+        denoiser.set_msms_keep(msms_keep);
+        denoiser.set_prm_windows(prm_windows);
+        denoiser.set_whole_frame_msms(dia_msms.is_some());
+        denoiser.set_dia_windows(dia_windows);
+        denoiser.set_dia_regions(dia_regions);
+        denoiser.set_dda_windows(dda_windows);
+        denoiser.set_dia_ms1_gate(dia_ms1_gate);
+        denoiser.set_polygon_gate(polygon_gate);
 
         let md = MetadataReader::new(&in_tdf).map_err(|e| DnoiseError::Metadata(e.to_string()))?;
         // The accessor serves the run's scale; a multi-calibration run (which the
@@ -1627,19 +1086,7 @@ impl<'a> RunContext<'a> {
 
         Ok(RunContext {
             reader,
-            meta,
-            params: *params,
-            stages: *stages,
-            msms_keep,
-            prm_windows,
-            dia_msms,
-            dia_windows,
-            dia_regions,
-            dda_windows,
-            dia_ms1_gate,
-            polygon_gate,
-            rt_keep,
-            neighbors,
+            denoiser,
             calibration,
             n_ms1,
         })
@@ -1647,12 +1094,12 @@ impl<'a> RunContext<'a> {
 
     /// Total frame count (MS1 + MS/MS), the valid range for [`Self::process`].
     pub fn len(&self) -> usize {
-        self.meta.len()
+        self.denoiser.len()
     }
 
     /// True when the context holds no frames.
     pub fn is_empty(&self) -> bool {
-        self.meta.is_empty()
+        self.denoiser.is_empty()
     }
 
     /// Number of MS1 frames.
@@ -1662,7 +1109,7 @@ impl<'a> RunContext<'a> {
 
     /// True when frame `i` is an MS1 frame.
     pub fn is_ms1(&self, i: usize) -> bool {
-        self.meta[i].is_ms1()
+        self.denoiser.is_ms1(i)
     }
 
     /// The run's calibration, for converting survivor `(scan, tof)` to `(1/K0, m/z)`.
@@ -1673,160 +1120,20 @@ impl<'a> RunContext<'a> {
     /// Decode frame `i` through every enabled stage and return its survivors.
     /// Safe to call concurrently across frames (`&self`).
     pub fn process(&self, i: usize) -> Result<DecodedFrame> {
-        let ctx = FrameCtx {
-            msms: self.msms_keep.as_ref(),
-            prm_msms: self.stages.denoise_msms.zip(self.prm_windows.as_ref()),
-            dia_msms: self.dia_msms,
-            dia_windows: self.dia_windows.as_ref(),
-            dia_regions: self.dia_regions.as_ref(),
-            dda_windows: self.dda_windows.as_ref(),
-            dia_ms1: self.dia_ms1_gate.as_ref(),
-            polygon: self.polygon_gate.as_ref(),
-            crop: None,
-            crop_only: false,
-            rt_keep: &self.rt_keep,
-            neighbors: self.neighbors.as_ref(),
-            cancel: None,
-        };
-        process_frame_decoded(
-            &self.reader,
-            &self.meta,
-            i,
-            &self.params,
-            &self.stages,
-            &ctx,
-        )
+        Ok(self
+            .denoiser
+            .process(i, &|j| read_flat(&self.reader, j), None)?)
+    }
+
+    /// The run's per-frame pipeline, for callers that read frames themselves.
+    pub fn denoiser(&self) -> &Denoiser<'a> {
+        &self.denoiser
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn benchmark_calibration() -> ScanToMobility {
-        // The TimsCalibration row used by the mobility.rs load test.
-        ScanToMobility::Calibrated(
-            mobility::TimsCalibrationModel::new(
-                2,
-                [
-                    1.0,
-                    935.0,
-                    239.34640606518187,
-                    102.96946384662338,
-                    33.64485981308411,
-                    1.0,
-                    -0.026580764926972034,
-                    171.42849749723894,
-                    16.838457909616054,
-                    1732.6649859338625,
-                ],
-            )
-            .unwrap(),
-        )
-    }
-
-    #[test]
-    fn window_scans_without_pad_is_the_half_open_window_exactly() {
-        let im = benchmark_calibration();
-        for begin in 0..900u32 {
-            assert_eq!(
-                window_scans(begin, begin + 30, 0.0, &im, 936),
-                (begin, begin + 29)
-            );
-        }
-        assert_eq!(window_scans(920, 1000, 0.0, &im, 936), (920, 935));
-    }
-
-    #[test]
-    fn window_scans_tiny_pad_adds_no_scan_from_float_noise() {
-        // A pad far below one scan's 1/K0 width must not widen the window.
-        let im = benchmark_calibration();
-        for begin in 1..900u32 {
-            assert_eq!(
-                window_scans(begin, begin + 30, 1e-9, &im, 936),
-                (begin, begin + 29)
-            );
-        }
-    }
-
-    #[test]
-    fn window_scans_pad_widens_both_edges() {
-        let im = benchmark_calibration();
-        let (lo, hi) = window_scans(400, 430, 0.01, &im, 936);
-        assert!(lo < 400 && hi > 429, "({lo}, {hi})");
-        assert!((im.convert(f64::from(lo)) - im.convert(400.0)).abs() <= 0.01 + 1e-3);
-    }
-
-    #[test]
-    fn padded_dia_ms1_windows_contain_the_window_and_every_point_within_the_pads() {
-        // Containment for the DIA MS1 gate, as tests/polygon_props.rs does for the
-        // polygon: every point of the unpadded window is kept, and so is every
-        // point whose 1/K0 lies within im_pad and m/z within mz_pad of it.
-        let im = benchmark_calibration();
-        let mz = crate::tsr::Tof2MzConverter::from_boundaries(95.0, 1705.0, 400_000);
-        let mz_to_tof = |m: f64| mz.invert(m);
-        let num_scans = 936;
-        let windows = [
-            (0u32, 60u32, 400.0, 425.0),
-            (100, 180, 612.5, 637.5),
-            (430, 431, 800.0, 801.0),
-            (500, 700, 1000.0, 1100.0),
-            (880, 936, 1200.0, 1225.0),
-        ];
-        for (mz_pad, im_pad) in [(0.0, 0.0), (3.0, 0.015), (0.5, 0.003), (5.0, 0.05)] {
-            let p = DiaMs1WindowParams {
-                mz_pad,
-                im_pad,
-                overlap: false,
-            };
-            for &(scan_begin, scan_end, mz_lo, mz_hi) in &windows {
-                let b = tdf::DiaMs1Box {
-                    scan_begin,
-                    scan_end,
-                    mz_lo,
-                    mz_hi,
-                };
-                let bx = dia_ms1_box(&b, &p, mz_to_tof, &im, num_scans);
-                let gate = DiaMs1Gate::build(&[bx], num_scans).unwrap();
-                let (k_a, k_b) = (
-                    im.convert(f64::from(scan_begin)),
-                    im.convert(f64::from(scan_end - 1)),
-                );
-                let (k_lo, k_hi) = (k_a.min(k_b) - im_pad, k_a.max(k_b) + im_pad);
-                let tof_lo = mz_to_tof(mz_lo - mz_pad).ceil() as u32;
-                let tof_hi = mz_to_tof(mz_hi + mz_pad).floor() as u32;
-                for s in 0..num_scans as u32 {
-                    let k = im.convert(f64::from(s));
-                    let in_window = (scan_begin..scan_end).contains(&s);
-                    let in_pad = (k_lo..=k_hi).contains(&k);
-                    if in_window || in_pad {
-                        for t in [tof_lo, (tof_lo + tof_hi) / 2, tof_hi] {
-                            assert!(
-                                gate.contains(s, t),
-                                "pads ({mz_pad}, {im_pad}), window {scan_begin}..{scan_end}: \
-                                 scan {s} TOF {t} dropped"
-                            );
-                        }
-                    }
-                    // Over-inclusion is bounded by one scan / one TOF index.
-                    if gate.contains(s, (tof_lo + tof_hi) / 2) {
-                        let slack = (im.convert(f64::from(s.saturating_sub(1)))
-                            - im.convert(f64::from(s + 1)))
-                        .abs();
-                        assert!(
-                            in_window || (k_lo - slack..=k_hi + slack).contains(&k),
-                            "scan {s} (1/K0 {k}) kept beyond the pad"
-                        );
-                    }
-                }
-                assert!(!gate.contains(bx.scan_lo, bx.tof_lo.saturating_sub(1)) || bx.tof_lo == 0);
-                assert!(!gate.contains(bx.scan_lo, bx.tof_hi + 1));
-                assert!(
-                    tof_lo.saturating_sub(bx.tof_lo) <= 1 && bx.tof_hi.saturating_sub(tof_hi) <= 1
-                );
-            }
-        }
-    }
 
     #[test]
     fn frame_sampled_fraction_one_keeps_every_frame() {

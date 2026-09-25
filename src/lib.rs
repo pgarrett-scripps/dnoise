@@ -10,6 +10,10 @@
 //!   [`filter::filter_iterated`], [`average::running_average`], and the type-2
 //!   [`codec`] operate on in-memory frames for callers that bring their own I/O.
 //!
+//! The in-memory stages and the per-frame [`Denoiser`] live in the
+//! [`dnoise_core`] crate, which has no I/O or native dependencies; they are
+//! re-exported here at their original paths.
+//!
 //! # Example
 //!
 //! Run the vertical-IM filter over an in-memory frame:
@@ -31,28 +35,20 @@
 
 #![warn(missing_docs)]
 
-pub mod average;
-pub mod box_centroid;
+pub use dnoise_core::{
+    average, box_centroid, crop, dia_ms1, dia_window, filter, frame, halo, overlap, params,
+    polygon, smooth, watershed,
+};
+
 pub mod codec;
 #[cfg(feature = "config")]
 pub mod config;
-pub mod crop;
-pub mod dia_ms1;
-pub mod dia_window;
 pub mod error;
-pub mod filter;
-pub mod frame;
-pub mod halo;
 pub mod mobility;
 pub mod msms;
 mod neighbor;
-pub mod overlap;
-pub mod params;
-pub mod polygon;
-pub mod smooth;
 pub mod tsr;
 pub mod units;
-pub mod watershed;
 pub mod writer;
 
 // SQLite plumbing for the high-level pipeline; not part of the public API.
@@ -64,6 +60,7 @@ mod tdf;
 pub mod validation;
 
 // High-level pipeline.
+pub use dnoise_core::{Acquisition, DecodedFrame, Denoiser};
 pub use error::{DecodeError, DnoiseError, Result};
 pub use mobility::MobilityScale;
 pub use params::{
@@ -72,9 +69,8 @@ pub use params::{
     Stages, WatershedParams,
 };
 pub use writer::{
-    Calibration, DecodedFrame, DenoiseStats, FrameCtx, Progress, RunContext, RunOptions,
-    SampleSpec, denoise, denoise_in_place, denoise_with_options, denoise_with_progress,
-    process_frame_decoded,
+    Calibration, DenoiseStats, Progress, RunContext, RunOptions, SampleSpec, denoise,
+    denoise_in_place, denoise_with_options, denoise_with_progress,
 };
 
 // Low-level building blocks.
@@ -83,38 +79,6 @@ pub use crop::CropGate;
 use crate::tsr::ConvertableDomain;
 use crate::tsr::MetadataReader;
 use std::path::Path;
-
-/// Acquisition scheme of a `.d` run, detected from frame types and checked PRM events.
-/// Drives the `--preset auto` gate selection (see the CLI): ddaPASEF wants the MS1
-/// selection-polygon gate, diaPASEF the isolation-window gates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Acquisition {
-    /// ddaPASEF (`MsMsType` 8 present): data-dependent PASEF.
-    DdaPasef,
-    /// diaPASEF (`MsMsType` 9 present): data-independent PASEF.
-    DiaPasef,
-    /// prm-PASEF (`MsMsType` 10) with checked target/event metadata.
-    PrmPasef,
-    /// More than one nonzero frame type. Acquisition gates are disabled.
-    Mixed,
-    /// Only MS1 frames — no MS/MS in the run.
-    Ms1Only,
-    /// MS/MS frames present but of an unrecognised `MsMsType`.
-    Unknown,
-}
-
-impl std::fmt::Display for Acquisition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::DdaPasef => "ddaPASEF",
-            Self::DiaPasef => "diaPASEF",
-            Self::PrmPasef => "prm-PASEF",
-            Self::Mixed => "mixed acquisition",
-            Self::Ms1Only => "MS1-only",
-            Self::Unknown => "unknown acquisition",
-        })
-    }
-}
 
 /// Detect the acquisition scheme without decoding frames. PRM event metadata is
 /// checked for valid frame/target references, isolation geometry and scan bounds.
