@@ -395,6 +395,19 @@ fn run<F: FnMut(Progress)>(
         empty = n_empty,
         "denoise: frame inventory"
     );
+    // Raw-unit parameters (TOF indices, scans) with their physical equivalents
+    // for this run's calibration. Informational only; a run whose calibration
+    // cannot be read here still runs (a gate that needs it fails on its own).
+    if !crop_only {
+        match crate::units::for_run(&in_tdf, params, stages) {
+            Ok(eqs) => {
+                for e in eqs {
+                    info!("units: {}", e.line());
+                }
+            }
+            Err(e) => debug!("units: physical equivalents unavailable ({e})"),
+        }
+    }
 
     // MS/MS denoising splits by acquisition scheme, driven by the same
     // `denoise_msms` params:

@@ -29,6 +29,12 @@ acquisition gates, both widening what is kept near a gate edge:
   and every point within the pads of it is kept.
 - A warning when `analysis.tdf` has more than one `GroupProperties` row for the
   selection polygon; the gate uses the first.
+- Each run logs (info) the raw-unit parameters of its active stages (TOF
+  indices, scans) with their physical equivalents for that run's calibration,
+  one line each: TOF half-widths in ppm at m/z 400, 800 and 1200, scan counts in
+  1/K0 at the mid scan. The same values go into `dnoise.provenance.json` as
+  `unit_equivalents` (`dnoise::units`). The parameters themselves stay in raw
+  units.
 
 ### Changed
 - `ms1_polygon_mz_pad` / `dia_ms1_mz_pad` default to 3.0 Th and

@@ -51,6 +51,7 @@ pub mod params;
 pub mod polygon;
 pub mod smooth;
 pub mod tsr;
+pub mod units;
 pub mod watershed;
 pub mod writer;
 

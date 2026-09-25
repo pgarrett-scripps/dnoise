@@ -157,6 +157,13 @@ pub fn report(
     {
         value["effective_config"]["threads"] = json!(stats.worker_threads);
     }
+    // Physical equivalents of the raw-unit parameters for this run (null when
+    // the calibration cannot be read, or for a crop-only run).
+    value["unit_equivalents"] = json!(
+        (!options.crop_only)
+            .then(|| crate::units::for_run(&input.join("analysis.tdf"), params, stages).ok())
+            .flatten()
+    );
     value["dry_run"] = json!(stats.dry_run);
     value["elapsed_seconds"] = json!(stats.elapsed_seconds);
     value["stats"]["kept_pct"] = json!(if stats.raw_points > 0 {

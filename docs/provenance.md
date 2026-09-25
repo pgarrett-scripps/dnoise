@@ -12,6 +12,10 @@ The JSON records schema/software versions, build revision, completion time,
 input basename, acquisition type, all active stage parameters, active gates,
 crop settings, point/intensity statistics, actual binary sizes, and warnings.
 It labels crop-only operations separately from denoising.
+`unit_equivalents` lists each active raw-unit parameter (TOF indices, scans)
+with what it meant on this run's calibration: TOF half-widths in ppm at m/z 400,
+800 and 1200, scan counts in 1/K0 at the mid scan. The run log prints the same
+values, one `units:` line per parameter.
 New records also identify the validation mode (`full` or `structural`). Structural
 mode means `--skip-validation` was used; completion is not a claim that every
 input/output payload passed a separate decoding check. The TOML retains this choice.
