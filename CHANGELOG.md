@@ -8,8 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.5.0] (unreleased)
 
-**Default MS1 output changes on ddaPASEF and diaPASEF.** Two changes to the MS1
-acquisition gates, both widening what is kept near a gate edge:
+**Default MS1 output changes on ddaPASEF and diaPASEF.** Three changes to the
+MS1 stages; the first two widen what is kept near a gate edge:
 
 - A feature kept by feature-level gating is now kept over its whole extent.
   0.4.0 cut it at 0.1 1/K0 beyond the mobility range of its inside points.
@@ -17,6 +17,10 @@ acquisition gates, both widening what is kept near a gate edge:
   1/K0 on each side (0.4.0: 0 and 0). To get 0.4.0's literal gate geometry,
   pass `--ms1-polygon-mz-pad 0 --ms1-polygon-im-pad 0 --dia-ms1-mz-pad 0
   --dia-ms1-im-pad 0` (the 0.1 1/K0 reach cannot be restored).
+- The MS1 stage order is now streak filter, gate, halo (0.4.0: streak, halo,
+  gate). Points the gate drops no longer act as halo references, and
+  feature-level gating now links through points the halo filter removes
+  afterwards. Temporal neighbor support keeps the old order.
 
 ### Added
 - **New crate `dnoise-core`**: the in-memory denoising stages, split out of
@@ -51,6 +55,10 @@ acquisition gates, both widening what is kept near a gate edge:
   units.
 
 ### Changed
+- MS1 m/z pre-cut: with one MS1 gate active, points far outside the gate's TOF
+  range skip the streak filter. Output is unchanged (the margin covers the
+  streak filter's reach, and a feature that escapes the range reruns the frame
+  whole); it saves the filter work on the m/z range the gate drops anyway.
 - `ms1_polygon_mz_pad` / `dia_ms1_mz_pad` default to 3.0 Th and
   `ms1_polygon_im_pad` / `dia_ms1_im_pad` to 0.015 1/K0 (were 0). MS1 gates only.
   The m/z pads are documented in Th (m/z units), not Da.

@@ -40,7 +40,7 @@ so binary offsets stay consistent.
 | `--min-window-intensity` | 0 | Per-scan summed-intensity floor for occupancy. |
 | `--min-feature-intensity` | 0 | Total summed-intensity floor for a kept feature. |
 | `--iterations` | 2 | Filter passes (each re-applies to prior survivors). |
-| `--no-halo` | (on) | Disable the horizontal-halo filter, which runs after the vertical filter (see below). |
+| `--no-halo` | (on) | Disable the horizontal-halo filter, which runs after the vertical filter and the MS1 gate (see below). |
 | `--halo-peak-fraction` | 0.10 | Drop a peak below this fraction of its off-column box-max. |
 | `--halo-mz-idx-half-width` | 80 | Reference-box half-width along TOF index. |
 | `--halo-scan-half-width` | 2 | Reference-box half-width along ion-mobility scan. |
@@ -172,7 +172,7 @@ window (precursors that are never selected), keeping the survey scans to the
 useful precursor band. Applies to MS1 frames only and is a no-op on ddaPASEF.
 
 The gate decides per **feature**, not per point (`--dia-ms1-overlap`, on by
-default). The points that survived the streak and halo filters are grouped
+default). The points that survived the streak filter are grouped
 with the streak filter's own adjacency (within `mz-half-width` TOF indices and
 `max-internal-gap + 1` scans), and a feature is kept whole when any of its
 points lies inside a window. A precursor whose mobility peak straddles a window
@@ -195,7 +195,7 @@ polygon gate (`--ms1-polygon`) works the same way with its own
 
 ## Horizontal-halo filter (on by default)
 
-After the vertical filter, dnoise removes the weak m/z halo flanking bright
+After the vertical filter and the MS1 gate (0.4.x: before the gate), dnoise removes the weak m/z halo flanking bright
 ions, left/right only. Each peak is compared to the maximum intensity in its
 surrounding box (`±halo-scan-half-width` scans × `±halo-mz-idx-half-width` TOF
 indices) **excluding its own TOF column**, and dropped if its intensity is

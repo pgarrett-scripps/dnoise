@@ -82,6 +82,24 @@ impl DiaMs1Gate {
         })
     }
 
+    /// Inclusive TOF hull `(lo, hi)` of every interval the gate keeps, over all
+    /// scans; `None` when the gate keeps nothing. No kept point lies outside it.
+    pub fn tof_span(&self) -> Option<(u32, u32)> {
+        let lo = self
+            .per_scan
+            .iter()
+            .filter_map(|r| r.first())
+            .map(|i| i.0)
+            .min()?;
+        let hi = self
+            .per_scan
+            .iter()
+            .filter_map(|r| r.last())
+            .map(|i| i.1)
+            .max()?;
+        Some((lo, hi))
+    }
+
     /// True when the point lies inside some isolation window (and should be kept).
     pub fn contains(&self, scan: u32, tof: u32) -> bool {
         let Some(row) = self.per_scan.get(scan as usize) else {

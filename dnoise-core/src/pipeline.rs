@@ -570,38 +570,15 @@ impl<'a> Denoiser<'a> {
         let mut keep = if crop_only {
             vec![true; to_filter.len()]
         } else if meta_i.is_ms1() {
-            let mut keep = if let Some(mask) = neighborhood_mask {
-                mask
-            } else {
-                let mut keep = filter_iterated(to_filter, params);
-                if let Some(hp) = halo {
-                    apply_halo(to_filter, hp, &mut keep);
+            match neighborhood_mask {
+                // Temporal support already ran streak and halo on the summed
+                // neighborhood; only the gates remain.
+                Some(mut keep) => {
+                    self.apply_ms1_gates(to_filter, &mut keep);
+                    keep
                 }
-                keep
-            };
-            // diaPASEF MS1 out-of-window gate: drop surviving points whose (scan, TOF)
-            // is in no padded isolation window. Composes as an AND on the keep mask.
-            if let Some(gate) = &self.dia_ms1 {
-                let mut mask = gate.keep_mask(&to_filter.scan, &to_filter.tof);
-                if gate.overlap {
-                    mask = overlap_mask(to_filter, &keep, &mask, params);
-                }
-                for (slot, in_win) in keep.iter_mut().zip(mask) {
-                    *slot &= in_win;
-                }
+                None => self.ms1_keep(to_filter),
             }
-            // MS1 selection-polygon gate: drop surviving points outside the run's IMS
-            // PolygonFilter region (never-selected precursor space). Also ANDed in.
-            if let Some(gate) = &self.polygon {
-                let mut mask = gate.keep_mask(&to_filter.scan, &to_filter.tof);
-                if gate.overlap {
-                    mask = overlap_mask(to_filter, &keep, &mask, params);
-                }
-                for (slot, inside) in keep.iter_mut().zip(mask) {
-                    *slot &= inside;
-                }
-            }
-            keep
         } else if let Some(mask) = neighborhood_mask {
             mask
         } else if let Some((mp, windows)) = prm_msms {
@@ -757,6 +734,91 @@ impl<'a> Denoiser<'a> {
             cropped: false,
         })
     }
+
+    /// MS1 keep mask without temporal support, in stage order: m/z pre-cut,
+    /// streak filter, MS1 gates, halo.
+    ///
+    /// The pre-cut runs only with exactly one MS1 gate. It drops points whose TOF
+    /// is more than `(iterations + 1) x mz_half_width` outside the gate's TOF
+    /// hull. The streak filter decides a point from points within
+    /// `iterations x mz_half_width` TOF of it, so every point within one
+    /// `mz_half_width` of the hull is decided exactly as on the whole frame. A
+    /// point gate keeps nothing outside the hull, so there the cut is exact. A
+    /// feature-level gate can keep a feature that runs out of the hull; any such
+    /// feature leaves the hull through a point within `mz_half_width` of it, which
+    /// the cut decides exactly, so it shows up as a kept point outside the hull.
+    /// The frame is then redone without the cut. Output is therefore identical to
+    /// running the stages on the whole frame.
+    fn ms1_keep(&self, frame: &FlatFrame) -> Vec<bool> {
+        let params = &self.params;
+        let span = match (&self.dia_ms1, &self.polygon) {
+            (Some(g), None) => g.tof_span(),
+            (None, Some(g)) => g.tof_span(),
+            _ => None,
+        };
+        if let Some((lo, hi)) = span {
+            let margin = (params.num_iterations as u32)
+                .saturating_add(1)
+                .saturating_mul(params.mz_half_width);
+            let (cut_lo, cut_hi) = (lo.saturating_sub(margin), hi.saturating_add(margin));
+            let idx: Vec<usize> = (0..frame.len())
+                .filter(|&k| (cut_lo..=cut_hi).contains(&frame.tof[k]))
+                .collect();
+            if idx.len() < frame.len() {
+                let sub = FlatFrame {
+                    frame_id: frame.frame_id,
+                    num_scans: frame.num_scans,
+                    scan: idx.iter().map(|&k| frame.scan[k]).collect(),
+                    tof: idx.iter().map(|&k| frame.tof[k]).collect(),
+                    intensity: idx.iter().map(|&k| frame.intensity[k]).collect(),
+                };
+                let mut sub_keep = filter_iterated(&sub, params);
+                self.apply_ms1_gates(&sub, &mut sub_keep);
+                let escaped = sub_keep
+                    .iter()
+                    .zip(&sub.tof)
+                    .any(|(&kept, t)| kept && !(lo..=hi).contains(t));
+                if !escaped {
+                    if let Some(hp) = self.stages.halo {
+                        apply_halo(&sub, hp, &mut sub_keep);
+                    }
+                    let mut keep = vec![false; frame.len()];
+                    for (&k, kept) in idx.iter().zip(sub_keep) {
+                        keep[k] = kept;
+                    }
+                    return keep;
+                }
+            }
+        }
+        let mut keep = filter_iterated(frame, params);
+        self.apply_ms1_gates(frame, &mut keep);
+        if let Some(hp) = self.stages.halo {
+            apply_halo(frame, hp, &mut keep);
+        }
+        keep
+    }
+
+    /// AND the MS1 acquisition gates into `keep`: the diaPASEF window gate, then
+    /// the selection-polygon gate. With `overlap`, a gate decides per streak
+    /// feature of the current survivors ([`crate::overlap`]).
+    fn apply_ms1_gates(&self, frame: &FlatFrame, keep: &mut [bool]) {
+        let gates = [
+            self.dia_ms1
+                .as_ref()
+                .map(|g| (g.keep_mask(&frame.scan, &frame.tof), g.overlap)),
+            self.polygon
+                .as_ref()
+                .map(|g| (g.keep_mask(&frame.scan, &frame.tof), g.overlap)),
+        ];
+        for (mut mask, overlap) in gates.into_iter().flatten() {
+            if overlap {
+                mask = overlap_mask(frame, keep, &mask, &self.params);
+            }
+            for (slot, inside) in keep.iter_mut().zip(mask) {
+                *slot &= inside;
+            }
+        }
+    }
 }
 
 /// The frame source of [`Denoiser::denoise_ms1`] / [`Denoiser::denoise_msms`]:
@@ -809,6 +871,7 @@ fn apply_halo(frame: &FlatFrame, hp: &HaloParams, keep: &mut [bool]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dia_ms1::TofScanBox;
 
     fn meta(ms_ms_type: i64) -> Vec<FrameMeta> {
         vec![FrameMeta {
@@ -868,6 +931,81 @@ mod tests {
         let out = d.denoise_ms1(0, &lone_point()).unwrap();
         assert!(out.cropped && out.survivors.is_empty());
         assert_eq!((out.raw_points, out.raw_summed), (1, 7));
+    }
+
+    /// Streaks and scattered noise across TOF 0..2000, plus a staircase of
+    /// linked streaks running from inside a TOF 800..=1200 gate out to TOF 1300.
+    fn gated_frame() -> FlatFrame {
+        let (mut scan, mut tof, mut intensity) = (Vec::new(), Vec::new(), Vec::new());
+        let mut push = |s: u32, t: u32, i: u32| {
+            scan.push(s);
+            tof.push(t);
+            intensity.push(i);
+        };
+        let mut x: u64 = 12345;
+        let mut next = move || {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) as u32
+        };
+        for _ in 0..40 {
+            let (t, s0, len) = (next() % 2000, next() % 90, 3 + next() % 10);
+            for s in s0..(s0 + len).min(100) {
+                push(s, t, 50 + next() % 500);
+                if next() % 3 == 0 {
+                    push(s, t + 1 + next() % 60, 5 + next() % 40); // halo-like flank
+                }
+            }
+        }
+        for _ in 0..400 {
+            push(next() % 100, next() % 2000, 1 + next() % 100);
+        }
+        for step in 0..40 {
+            let t = 1180 + 3 * step;
+            for s in 30..40 {
+                push(s, t, 300);
+            }
+        }
+        FlatFrame {
+            frame_id: 1,
+            num_scans: 100,
+            scan,
+            tof,
+            intensity,
+        }
+    }
+
+    #[test]
+    fn precut_matches_the_whole_frame() {
+        let p = FilterParams::default();
+        let halo = HaloParams::default();
+        let s = Stages {
+            halo: Some(&halo),
+            ..Stages::default()
+        };
+        let frame = gated_frame();
+        for overlap in [false, true] {
+            let mut d = Denoiser::new(&p, &s, Acquisition::DiaPasef, meta(0), false).unwrap();
+            let boxes = [TofScanBox {
+                scan_lo: 20,
+                scan_hi: 80,
+                tof_lo: 800,
+                tof_hi: 1200,
+            }];
+            let mut gate = DiaMs1Gate::build(&boxes, 100).unwrap();
+            gate.overlap = overlap;
+            d.set_dia_ms1_gate(Some(gate));
+
+            let mut want = filter_iterated(&frame, &p);
+            d.apply_ms1_gates(&frame, &mut want);
+            apply_halo(&frame, &halo, &mut want);
+            assert_eq!(d.ms1_keep(&frame), want, "overlap = {overlap}");
+            // The staircase escapes past the cut only in overlap mode, which is
+            // the case the whole-frame fallback exists for.
+            let escaped = (0..frame.len()).any(|k| want[k] && frame.tof[k] > 1200 + 9);
+            assert_eq!(escaped, overlap);
+        }
     }
 
     #[test]

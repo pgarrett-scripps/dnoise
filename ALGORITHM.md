@@ -22,13 +22,31 @@ new binary.
 The CLI defaults used in the benchmark are:
 
 1. Filter MS1 frames with the iterative ion-mobility streak filter.
-2. Apply the m/z-halo filter to the surviving MS1 points.
-3. Apply the acquisition-appropriate MS1 gate when its geometry is present:
+2. Apply the acquisition-appropriate MS1 gate when its geometry is present:
    the PASEF selection polygon for ddaPASEF, or the union of isolation
    windows for diaPASEF. The gate keeps a whole streak-filter feature when any
    of its points lies inside, over the feature's full mobility extent.
+3. Apply the m/z-halo filter to the MS1 points that survived the gate.
 4. Copy MS/MS frames unchanged.
 5. Encode every frame in its original order and update the database metadata.
+
+Before step 1, when exactly one MS1 gate is active, points whose TOF index lies
+more than `(num_iterations + 1) × mz_half_width` outside the gate's TOF range
+are set aside unfiltered. This m/z pre-cut changes no output: the streak filter
+decides a point from points within `num_iterations × mz_half_width` TOF indices
+of it, so every point the gate can reach is decided as on the whole frame. A
+feature-level gate can keep a feature that runs past the gate's m/z range; such
+a feature leaves it through a point the pre-cut decided exactly, and the frame
+is then redone without the pre-cut. The pre-cut saves streak-filter work on the
+m/z range the gate drops anyway (for diaPASEF, everything outside the isolation
+windows).
+
+Up to 0.4.x the halo filter ran before the gate (streak, halo, gate). Running
+it after the gate changes the output slightly: points the gate removes no
+longer count as halo references, and feature-level gating links features
+through points the halo filter would have removed first. Temporal neighbor
+support keeps the old order, because it runs streak and halo filtering on the
+summed neighborhood before the gate.
 
 MS/MS filtering, frame averaging, smoothing, centroiding, and cropping are
 optional. The library API uses [`Stages::default`](dnoise-core/src/params.rs), which leaves
@@ -70,7 +88,7 @@ The benchmarked MS1 defaults are:
 
 ## m/z-halo filter
 
-After the streak filter, the default CLI compares each surviving point with
+After the streak filter and the MS1 gate, the default CLI compares each surviving point with
 the maximum intensity in a surrounding scan/TOF box, excluding the point's own
 TOF column. A point below `peak_fraction` of that off-column maximum is removed.
 Excluding the own column prevents a point's vertical ion-mobility streak from
