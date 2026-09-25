@@ -97,7 +97,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo +stable install cargo-audit --locked
-      - run: cargo +stable audit
+      # RUSTSEC-2026-0194/0195: quick-xml 0.37 via timsrust-core `io` ->
+      # filemanager `cloud` (default, not switchable in 0.6.6) -> object_store
+      # 0.11, which parses XML only from S3/Azure responses. dnoise opens local
+      # .d folders only, so that code is unreachable. Drop these ignores once
+      # timsrust ships filemanager without `cloud` by default.
+      - run: cargo +stable audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
 
   verifier-tests:
     name: SDK comparison logic (no proprietary SDK required)

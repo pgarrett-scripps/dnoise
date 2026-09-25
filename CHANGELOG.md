@@ -72,6 +72,10 @@ kept near a gate edge:
 - timsrust 0.4.2 -> `timsrust-tdf` 0.6.6 behind a local adapter (`dnoise::tsr`)
   that keeps 0.4.2's converters, metadata parsing and frame order;
   `rusqlite` 0.32 -> 0.35. See `PORT_NOTES.md`.
+  timsrust-tdf 0.6.6 links `object_store` 0.11 (through `filemanager`'s default
+  `cloud` feature), whose `quick-xml` 0.37 has RUSTSEC-2026-0194/0195. That
+  XML parsing runs only on cloud-storage responses, which dnoise never makes
+  (it opens local `.d` folders), so CI's audit ignores those two IDs.
 
 ### Deprecated
 - `ms1_polygon_overlap_reach` / `dia_ms1_overlap_reach` and
