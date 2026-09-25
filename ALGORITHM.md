@@ -122,12 +122,17 @@ The gates use acquisition geometry already stored in `analysis.tdf`:
 - **ddaPASEF MS/MS:** an isolation-event gate enforces the recorded PASEF scan
   intervals when fragment frames are filtered.
 
-Each gate is a no-op when its defining geometry is absent. Both MS1 gates are
+Each gate is a no-op when its defining geometry is absent. Both MS1 gate types
+work at feature level by default: a streak feature with any point inside the
+padded region is kept over its whole extent (0.4.0 stopped it 0.1 1/K0 beyond
+the mobility range of its inside points). Both MS1 gates are
 padded in physical units, by default 3 Th in m/z and 0.015 1/K0 in mobility on
 each side (0.4.0: no pads). The padded gate covers every point within the pads
 of the polygon or window: at each scan it takes the gate's m/z extent over the
 whole `±im_pad` mobility band, not just the scan's own line. The pads apply to
 the MS1 gates only; the MS/MS isolation gates are padded in scans.
+Point-level gating (`--no-ms1-polygon-overlap`, `--no-dia-ms1-overlap`) with
+5 Th / 0.05 1/K0 pads reproduces 0.3.0.
 
 ## Optional stages
 
