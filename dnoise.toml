@@ -24,7 +24,7 @@ iterations = 2
 # (scan, TOF index) space. Set `halo = false` (or pass --no-halo) to disable.
 halo = true
 # Drop a peak below this fraction of the off-column box-max reference.
-halo_peak_fraction = 0.15
+halo_peak_fraction = 0.10
 # Reference-box half-width along TOF index.
 halo_mz_idx_half_width = 80
 # Reference-box half-width along ion-mobility scan.

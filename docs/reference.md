@@ -41,7 +41,7 @@ so binary offsets stay consistent.
 | `--min-feature-intensity` | 0 | Total summed-intensity floor for a kept feature. |
 | `--iterations` | 2 | Filter passes (each re-applies to prior survivors). |
 | `--no-halo` | (on) | Disable the horizontal-halo filter, which runs after the vertical filter (see below). |
-| `--halo-peak-fraction` | 0.15 | Drop a peak below this fraction of its off-column box-max. |
+| `--halo-peak-fraction` | 0.10 | Drop a peak below this fraction of its off-column box-max. |
 | `--halo-mz-idx-half-width` | 80 | Reference-box half-width along TOF index. |
 | `--halo-scan-half-width` | 2 | Reference-box half-width along ion-mobility scan. |
 | `--denoise-msms` | off | Denoise ddaPASEF **MS/MS** frames precursor-by-precursor (see below). Changes MS/MS spectra and IDs. |

@@ -76,7 +76,7 @@ TOF column. A point below `peak_fraction` of that off-column maximum is removed.
 Excluding the own column prevents a point's vertical ion-mobility streak from
 counting against it.
 
-The benchmarked defaults are a peak fraction of 0.15, a TOF-index half-width
+The defaults are a peak fraction of 0.10 (0.15 up to 0.4.x), a TOF-index half-width
 of 80, and a scan half-width of 2. `--no-halo` disables this stage.
 
 ## Acquisition-aware gates

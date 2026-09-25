@@ -52,7 +52,7 @@ pub struct HaloParams {
 impl Default for HaloParams {
     fn default() -> Self {
         Self {
-            peak_fraction: 0.15,
+            peak_fraction: 0.10,
             mz_idx_half_width: 80,
             scan_half_width: 2,
         }
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn halo_smooth_watershed_defaults() {
         let h = HaloParams::default();
-        assert_eq!(h.peak_fraction, 0.15);
+        assert_eq!(h.peak_fraction, 0.10);
         assert_eq!(h.mz_idx_half_width, 80);
         assert_eq!(h.scan_half_width, 2);
 
