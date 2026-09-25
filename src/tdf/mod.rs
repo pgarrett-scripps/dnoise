@@ -342,7 +342,26 @@ pub fn read_selection_polygon(tdf_path: &Path) -> Result<Option<(Vec<f64>, Vec<f
         return Ok(None);
     };
 
-    // One polygon per run: take the first group that stores each array.
+    // One polygon per run: take the first group that stores each array. A run
+    // with several groups storing a polygon is unexpected (no examined run has
+    // one); warn so the user knows only the first is used.
+    for (name, prop) in [
+        ("IMS_PolygonFilter_Mass", mz_id),
+        ("IMS_PolygonFilter_Mobility", im_id),
+    ] {
+        let (rows, distinct): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT Value) FROM GroupProperties WHERE Property=?1",
+            [prop],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if rows > 1 {
+            tracing::warn!(
+                "{}: analysis.tdf has {rows} GroupProperties rows for {name} ({distinct} \
+                 distinct); the MS1 polygon gate uses the first one only",
+                tdf_path.display()
+            );
+        }
+    }
     let read_blob = |prop: i64| -> Result<Option<Vec<f64>>> {
         let blob: Option<Vec<u8>> = conn
             .query_row(

@@ -118,10 +118,12 @@ dia_ms1_window = true
 # kept feature is kept over its whole mobility extent. (0.4.0's
 # *_overlap_reach keys are still accepted but ignored, with a warning.)
 dia_ms1_overlap = true
-# m/z leniency added to each side of every window, in Daltons (0.3.0: 5.0).
-dia_ms1_mz_pad = 0.0
-# Ion-mobility leniency added to each side of every window, in 1/K0 (0.3.0: 0.05).
-dia_ms1_im_pad = 0.0
+# m/z leniency added to each side of every window, in Th (m/z units)
+# (0.4.0: 0; 0.3.0: 5.0).
+dia_ms1_mz_pad = 3.0
+# Ion-mobility leniency added to each side of every window, in 1/K0
+# (0.4.0: 0; 0.3.0: 0.05).
+dia_ms1_im_pad = 0.015
 
 # --- MS1 selection-polygon gate (ddaPASEF/PASEF) ---
 # Drop MS1 points outside the run's instrument selection polygon (the IMS
@@ -136,12 +138,12 @@ ms1_polygon = true
 # Feature-level gating: keep a whole streak-filter feature when any of its points
 # lies inside the polygon (false = point by point, the 0.3.0 behavior).
 ms1_polygon_overlap = true
-# m/z leniency added to each side of the polygon, in Daltons. 0 = literal
-# polygon (0.3.0: 5.0).
-ms1_polygon_mz_pad = 0.0
+# m/z leniency added to each side of the polygon, in Th (m/z units). 0 =
+# literal polygon (0.4.0: 0; 0.3.0: 5.0).
+ms1_polygon_mz_pad = 3.0
 # Ion-mobility leniency added to each side, in 1/K0. 0 = literal polygon
-# (0.3.0: 0.05).
-ms1_polygon_im_pad = 0.0
+# (0.4.0: 0; 0.3.0: 0.05).
+ms1_polygon_im_pad = 0.015
 
 # Scan <-> 1/K0 scale for both MS1 gates (pads) and the mobility crop.
 # "calibrated" uses the run's TimsCalibration, the scale Bruker defines the

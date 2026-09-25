@@ -6,6 +6,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] (unreleased)
+
+**Default MS1 output changes on ddaPASEF and diaPASEF.** Two changes to the MS1
+acquisition gates, both widening what is kept near a gate edge:
+
+- A feature kept by feature-level gating is now kept over its whole extent.
+  0.4.0 cut it at 0.1 1/K0 beyond the mobility range of its inside points.
+- Both MS1 gates are padded by default: `mz_pad = 3.0` Th and `im_pad = 0.015`
+  1/K0 on each side (0.4.0: 0 and 0). To get 0.4.0's literal gate geometry,
+  pass `--ms1-polygon-mz-pad 0 --ms1-polygon-im-pad 0 --dia-ms1-mz-pad 0
+  --dia-ms1-im-pad 0` (the 0.1 1/K0 reach cannot be restored).
+
+### Added
+- Polygon gate: with `im_pad > 0` the padded gate takes the polygon's exact m/z
+  extent over the whole `±im_pad` band at every scan, instead of sampling only
+  three scan lines (which dropped a thin spike or sharp vertex between them).
+  After building, every scan's unpadded polygon interval is checked to lie in
+  the padded gate, and the run fails with a clear message if not. Property
+  tests (`tests/polygon_props.rs`) and `examples/polygon_check.rs` cover it.
+- A containment test for padded diaPASEF MS1 windows: every point of a window
+  and every point within the pads of it is kept.
+- A warning when `analysis.tdf` has more than one `GroupProperties` row for the
+  selection polygon; the gate uses the first.
+
+### Changed
+- `ms1_polygon_mz_pad` / `dia_ms1_mz_pad` default to 3.0 Th and
+  `ms1_polygon_im_pad` / `dia_ms1_im_pad` to 0.015 1/K0 (were 0). MS1 gates only.
+  The m/z pads are documented in Th (m/z units), not Da.
+- timsrust 0.4.2 -> `timsrust-tdf` 0.6.6 behind a local adapter (`dnoise::tsr`)
+  that keeps 0.4.2's converters, metadata parsing and frame order;
+  `rusqlite` 0.32 -> 0.35. See `PORT_NOTES.md`.
+
+### Deprecated
+- `ms1_polygon_overlap_reach` / `dia_ms1_overlap_reach` and
+  `--ms1-polygon-overlap-reach` / `--dia-ms1-overlap-reach`: accepted so 0.4.0
+  configs still load, ignored with a warning, never written to the recipe.
+
+### Removed
+- `overlap_reach` from `Ms1PolygonParams` and `DiaMs1WindowParams`, and the
+  `reach` argument of `overlap::extend_to_features`. `PolygonGate::overlap` and
+  `DiaMs1Gate::overlap` are now `bool`.
+
+
 ## [0.4.0] - 2026-09-23
 
 The MS1 acquisition gates decide per feature instead of per point, and their

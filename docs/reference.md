@@ -53,9 +53,9 @@ so binary offsets stay consistent.
 | `--dda-window-scan-pad` | 0 | Scans of leniency added to each side of every isolation event. |
 | `--dia-ms1-window` | on | **diaPASEF only.** Drop MS1 points whose `(m/z, mobility)` falls outside every isolation window (precursors that are never fragmented, see below). `--no-dia-ms1-window` disables. |
 | `--dia-ms1-overlap` | on | MS1 gate: keep a whole streak-filter feature when any of its points lies in a window. `--no-dia-ms1-overlap` gates point by point (0.3.0). |
-| `--dia-ms1-mz-pad` | 0 | MS1 gate: m/z leniency (Da) added to each side of every window (0.3.0: 5). |
-| `--dia-ms1-im-pad` | 0 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window (0.3.0: 0.05). |
-| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space). Auto-detected, so it is a no-op if the run stores no polygon or defines a diaPASEF window scheme. `--no-ms1-polygon` disables. Feature-level gating: `--ms1-polygon-overlap` (on; `--no-ms1-polygon-overlap` for point by point). Pads: `--ms1-polygon-mz-pad` (Da, default 0), `--ms1-polygon-im-pad` (1/K0, default 0). |
+| `--dia-ms1-mz-pad` | 3 | MS1 gate: m/z leniency (Th) added to each side of every window (0.4.0: 0; 0.3.0: 5). |
+| `--dia-ms1-im-pad` | 0.015 | MS1 gate: ion-mobility leniency (1/K0) added to each side of every window (0.4.0: 0; 0.3.0: 0.05). |
+| `--ms1-polygon` | on | **ddaPASEF.** Drop MS1 points outside the run's PASEF selection polygon (never-selected precursor space). Auto-detected, so it is a no-op if the run stores no polygon or defines a diaPASEF window scheme. `--no-ms1-polygon` disables. Feature-level gating: `--ms1-polygon-overlap` (on; `--no-ms1-polygon-overlap` for point by point). Pads: `--ms1-polygon-mz-pad` (Th, default 3), `--ms1-polygon-im-pad` (1/K0, default 0.015). |
 | `--smooth` | off | Final stage: box-average each survivor's intensity over its `(scan, TOF-index)` box (stabilises the watershed centroider). Sub: `--smooth-mz-idx-half-width`, `--smooth-scan-half-width`, `--smooth-iterations`. |
 | `--watershed` | off | Final stage: watershed centroiding, collapsing point groups into intensity-weighted centroids (lossy). Sub: `--watershed-box-scan`, `--watershed-box-mz-idx`, `--watershed-min-seed-intensity`, `--watershed-min-centroid-total`, `--watershed-max-tof-offset`. |
 | `--box-centroid` | off | Final stage: greedy small-box centroiding, tiling streaks into small centroids rather than collapsing them. Mutually exclusive with `--watershed`. Sub: `--box-centroid-mz-idx-half`, `--box-centroid-scan-half`, `--box-centroid-min-total`. |
@@ -183,10 +183,12 @@ mobility extent. (0.4.0 capped that at `--dia-ms1-overlap-reach`, default 0.1
 `--ms1-polygon-overlap-reach` flags and config keys are accepted but ignored,
 with a warning.)
 
-Optional pads widen each window in **physical units** before the test:
-`--dia-ms1-mz-pad` (Da) and `--dia-ms1-im-pad` (1/K0), both 0 by default and
-converted to TOF indices / scans once via the run's calibration. dnoise 0.3.0
-gated point by point with pads of 5 Da and 0.05 1/K0; `--no-dia-ms1-overlap
+Pads widen each window in **physical units** before the test:
+`--dia-ms1-mz-pad` (Th, default 3) and `--dia-ms1-im-pad` (1/K0, default 0.015),
+converted to TOF indices / scans once via the run's calibration; every scan
+within the mobility pad gets the full padded m/z band. dnoise 0.4.0 used no
+pads (`--dia-ms1-mz-pad 0 --dia-ms1-im-pad 0`). dnoise 0.3.0
+gated point by point with pads of 5 Th and 0.05 1/K0; `--no-dia-ms1-overlap
 --dia-ms1-mz-pad 5 --dia-ms1-im-pad 0.05` reproduces it. The ddaPASEF selection
 polygon gate (`--ms1-polygon`) works the same way with its own
 `--ms1-polygon-*` options.

@@ -179,10 +179,12 @@ pub struct DdaWindowParams {
 /// higher m/z) and mobility spread.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct DiaMs1WindowParams {
-    /// m/z leniency added to each side of every window, in **Daltons**. Maps
-    /// directly to isotopes (spaced `1/charge` Da), uniformly across the m/z range.
+    /// m/z leniency added to each side of every window, in **Th** (m/z units;
+    /// default 3.0). Maps directly to isotopes (spaced `1/charge` in m/z),
+    /// uniformly across the m/z range.
     pub mz_pad: f64,
-    /// Ion-mobility leniency added to each side of every window, in **1/K0**.
+    /// Ion-mobility leniency added to each side of every window, in **1/K0**
+    /// (default 0.015). Every scan within the pad gets the padded m/z band.
     pub im_pad: f64,
     /// Keep a whole MS1 feature when any of its points lies inside a (padded)
     /// window, instead of gating point by point ([`crate::overlap`]). A kept
@@ -193,8 +195,8 @@ pub struct DiaMs1WindowParams {
 impl Default for DiaMs1WindowParams {
     fn default() -> Self {
         Self {
-            mz_pad: 0.0,
-            im_pad: 0.0,
+            mz_pad: 3.0,
+            im_pad: 0.015,
             overlap: true,
         }
     }
@@ -207,14 +209,17 @@ impl Default for DiaMs1WindowParams {
 /// a precursor and can be dropped from the survey scans. The polygon itself comes
 /// from the data; the pads add physical-unit leniency so a precursor near an edge
 /// keeps its isotopic envelope (m/z) and mobility spread (1/K0). Defaults match
-/// [`DiaMs1WindowParams`]: no pads, feature-level gating.
+/// [`DiaMs1WindowParams`]: pads of 3 Th and 0.015 1/K0, feature-level gating.
+/// 0.4.0 used no pads (`mz_pad = 0`, `im_pad = 0`) and a 0.1 1/K0 overlap reach.
 /// `overlap = false` with `mz_pad = 5.0`, `im_pad = 0.05` reproduces 0.3.0.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Ms1PolygonParams {
-    /// m/z leniency added to each side of the polygon interior, in **Daltons**
-    /// (isotopes run to higher m/z, spaced `1/charge` Da).
+    /// m/z leniency added to each side of the polygon interior, in **Th** (m/z
+    /// units; default 3.0; isotopes run to higher m/z, spaced `1/charge`).
     pub mz_pad: f64,
-    /// Ion-mobility leniency added to each side, in **1/K0**.
+    /// Ion-mobility leniency added to each side, in **1/K0** (default 0.015).
+    /// The gate takes the exact m/z extent of the polygon over the whole
+    /// `±im_pad` band at every scan ([`crate::polygon`]).
     pub im_pad: f64,
     /// Keep a whole MS1 feature when any of its points lies inside the (padded)
     /// polygon, instead of gating point by point ([`crate::overlap`]). A kept
@@ -225,8 +230,8 @@ pub struct Ms1PolygonParams {
 impl Default for Ms1PolygonParams {
     fn default() -> Self {
         Self {
-            mz_pad: 0.0,
-            im_pad: 0.0,
+            mz_pad: 3.0,
+            im_pad: 0.015,
             overlap: true,
         }
     }
@@ -356,10 +361,10 @@ mod tests {
     }
 
     #[test]
-    fn dia_ms1_defaults_gate_features_without_pads() {
+    fn dia_ms1_defaults_gate_features_with_small_pads() {
         let d = DiaMs1WindowParams::default();
-        assert_eq!(d.mz_pad, 0.0);
-        assert_eq!(d.im_pad, 0.0);
+        assert_eq!(d.mz_pad, 3.0);
+        assert_eq!(d.im_pad, 0.015);
         assert!(d.overlap);
     }
 

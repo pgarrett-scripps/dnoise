@@ -211,10 +211,12 @@ struct Cli {
     /// Disable the diaPASEF MS1 out-of-window gate (otherwise on by default).
     #[arg(long)]
     no_dia_ms1_window: bool,
-    /// diaPASEF MS1 gate: m/z leniency added to each side of every window, in Da.
+    /// diaPASEF MS1 gate: m/z leniency added to each side of every window, in Th
+    /// (m/z units; default 3).
     #[arg(long)]
     dia_ms1_mz_pad: Option<f64>,
-    /// diaPASEF MS1 gate: ion-mobility leniency added to each side, in 1/K0.
+    /// diaPASEF MS1 gate: ion-mobility leniency added to each side, in 1/K0
+    /// (default 0.015).
     #[arg(long)]
     dia_ms1_im_pad: Option<f64>,
     /// diaPASEF MS1 gate: keep a whole MS1 feature when any of its points lies
@@ -240,11 +242,12 @@ struct Cli {
     /// ddaPASEF/PASEF).
     #[arg(long)]
     no_ms1_polygon: bool,
-    /// MS1 polygon gate: m/z leniency added to each side, in Da (keeps an edge
-    /// precursor's isotopic envelope).
+    /// MS1 polygon gate: m/z leniency added to each side, in Th (m/z units;
+    /// default 3; keeps an edge precursor's isotopic envelope).
     #[arg(long)]
     ms1_polygon_mz_pad: Option<f64>,
-    /// MS1 polygon gate: ion-mobility leniency added to each side, in 1/K0.
+    /// MS1 polygon gate: ion-mobility leniency added to each side, in 1/K0
+    /// (default 0.015).
     #[arg(long)]
     ms1_polygon_im_pad: Option<f64>,
     /// MS1 polygon gate: keep a whole MS1 feature when any of its points lies

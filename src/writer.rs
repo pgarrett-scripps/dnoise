@@ -1214,7 +1214,7 @@ fn require_single_calibration(path: &Path, mz: bool, im: bool, operation: &str) 
 }
 
 /// Build the diaPASEF MS1 out-of-window gate: read the isolation windows, pad each
-/// in physical units (`mz_pad` Da, `im_pad` 1/K0) using the run's calibration,
+/// in physical units (`mz_pad` Th, `im_pad` 1/K0) using the run's calibration,
 /// convert to integer `(scan, TOF index)` boxes, and assemble the per-scan lookup.
 /// Returns `None` for ddaPASEF (no windows) so the gate is skipped.
 fn build_dia_ms1_gate(
@@ -1240,31 +1240,43 @@ fn build_dia_ms1_gate(
     }
     let im = mobility::load(in_tdf, scale, md.im_converter)?;
 
+    let mz_to_tof = |mz: f64| md.mz_converter.invert(mz);
     let tof_boxes: Vec<TofScanBox> = boxes
         .iter()
-        .map(|b| {
-            // m/z edges -> TOF indices (monotonic), padded by mz_pad Da on each side.
-            let t0 = md.mz_converter.invert(b.mz_lo - p.mz_pad);
-            let t1 = md.mz_converter.invert(b.mz_hi + p.mz_pad);
-            let tof_lo = t0.min(t1).floor().max(0.0) as u32;
-            let tof_hi = t1.max(t0).ceil().max(0.0) as u32;
-
-            let (scan_lo, scan_hi) =
-                window_scans(b.scan_begin, b.scan_end, p.im_pad, &im, num_scans);
-
-            TofScanBox {
-                scan_lo,
-                scan_hi,
-                tof_lo,
-                tof_hi,
-            }
-        })
+        .map(|b| dia_ms1_box(b, p, mz_to_tof, &im, num_scans))
         .collect();
 
     Ok(DiaMs1Gate::build(&tof_boxes, num_scans).map(|mut g| {
         g.overlap = p.overlap;
         g
     }))
+}
+
+/// One diaPASEF isolation window as a padded integer `(scan, TOF)` box: the m/z
+/// band widened by `mz_pad` Th on each side (TOF edges rounded outward) and the
+/// scan interval widened by `im_pad` 1/K0 ([`window_scans`]). A window is a
+/// rectangle in `(m/z, scan)`, so the padded box is exactly the window's
+/// Minkowski sum with the pad rectangle: every scan within `im_pad` of the window
+/// gets the full padded m/z band.
+fn dia_ms1_box(
+    b: &tdf::DiaMs1Box,
+    p: &DiaMs1WindowParams,
+    mz_to_tof: impl Fn(f64) -> f64,
+    im: &ScanToMobility,
+    num_scans: usize,
+) -> TofScanBox {
+    // m/z edges -> TOF indices (monotonic), padded by mz_pad on each side.
+    let t0 = mz_to_tof(b.mz_lo - p.mz_pad);
+    let t1 = mz_to_tof(b.mz_hi + p.mz_pad);
+    let tof_lo = t0.min(t1).floor().max(0.0) as u32;
+    let tof_hi = t1.max(t0).ceil().max(0.0) as u32;
+    let (scan_lo, scan_hi) = window_scans(b.scan_begin, b.scan_end, p.im_pad, im, num_scans);
+    TofScanBox {
+        scan_lo,
+        scan_hi,
+        tof_lo,
+        tof_hi,
+    }
 }
 
 /// Inclusive scan range of a `[scan_begin, scan_end)` isolation window, padded by
@@ -1317,7 +1329,7 @@ fn overlap_mask(
 
 /// Build the MS1 selection-polygon gate: read the run's IMS PolygonFilter
 /// `(m/z, 1/K0)` vertices, convert them to per-scan TOF-index intervals via the
-/// run calibration (padded by `mz_pad` Da / `im_pad` 1/K0), and assemble the
+/// run calibration (padded by `mz_pad` Th / `im_pad` 1/K0), and assemble the
 /// per-scan lookup. Returns `None` when the run stores no polygon so the gate is
 /// skipped.
 ///
@@ -1363,7 +1375,7 @@ fn build_polygon_gate(
     gate.check_contains_unpadded(&mz, &im, im_at_scan, mz_to_tof)
         .map_err(|e| {
             DnoiseError::InvalidInput(format!(
-                "{}: MS1 polygon gate self-check failed (m/z pad {} Da, 1/K0 pad {}): the \
+                "{}: MS1 polygon gate self-check failed (m/z pad {} Th, 1/K0 pad {}): the \
                  padded gate does not contain the selection polygon ({e}). Pads must be >= 0; \
                  otherwise this is a dnoise bug, please report it. Disable the gate with \
                  ms1_polygon = false / --no-ms1-polygon to proceed.",
@@ -1730,6 +1742,77 @@ mod tests {
         let (lo, hi) = window_scans(400, 430, 0.01, &im, 936);
         assert!(lo < 400 && hi > 429, "({lo}, {hi})");
         assert!((im.convert(f64::from(lo)) - im.convert(400.0)).abs() <= 0.01 + 1e-3);
+    }
+
+    #[test]
+    fn padded_dia_ms1_windows_contain_the_window_and_every_point_within_the_pads() {
+        // Containment for the DIA MS1 gate, as tests/polygon_props.rs does for the
+        // polygon: every point of the unpadded window is kept, and so is every
+        // point whose 1/K0 lies within im_pad and m/z within mz_pad of it.
+        let im = benchmark_calibration();
+        let mz = crate::tsr::Tof2MzConverter::from_boundaries(95.0, 1705.0, 400_000);
+        let mz_to_tof = |m: f64| mz.invert(m);
+        let num_scans = 936;
+        let windows = [
+            (0u32, 60u32, 400.0, 425.0),
+            (100, 180, 612.5, 637.5),
+            (430, 431, 800.0, 801.0),
+            (500, 700, 1000.0, 1100.0),
+            (880, 936, 1200.0, 1225.0),
+        ];
+        for (mz_pad, im_pad) in [(0.0, 0.0), (3.0, 0.015), (0.5, 0.003), (5.0, 0.05)] {
+            let p = DiaMs1WindowParams {
+                mz_pad,
+                im_pad,
+                overlap: false,
+            };
+            for &(scan_begin, scan_end, mz_lo, mz_hi) in &windows {
+                let b = tdf::DiaMs1Box {
+                    scan_begin,
+                    scan_end,
+                    mz_lo,
+                    mz_hi,
+                };
+                let bx = dia_ms1_box(&b, &p, mz_to_tof, &im, num_scans);
+                let gate = DiaMs1Gate::build(&[bx], num_scans).unwrap();
+                let (k_a, k_b) = (
+                    im.convert(f64::from(scan_begin)),
+                    im.convert(f64::from(scan_end - 1)),
+                );
+                let (k_lo, k_hi) = (k_a.min(k_b) - im_pad, k_a.max(k_b) + im_pad);
+                let tof_lo = mz_to_tof(mz_lo - mz_pad).ceil() as u32;
+                let tof_hi = mz_to_tof(mz_hi + mz_pad).floor() as u32;
+                for s in 0..num_scans as u32 {
+                    let k = im.convert(f64::from(s));
+                    let in_window = (scan_begin..scan_end).contains(&s);
+                    let in_pad = (k_lo..=k_hi).contains(&k);
+                    if in_window || in_pad {
+                        for t in [tof_lo, (tof_lo + tof_hi) / 2, tof_hi] {
+                            assert!(
+                                gate.contains(s, t),
+                                "pads ({mz_pad}, {im_pad}), window {scan_begin}..{scan_end}: \
+                                 scan {s} TOF {t} dropped"
+                            );
+                        }
+                    }
+                    // Over-inclusion is bounded by one scan / one TOF index.
+                    if gate.contains(s, (tof_lo + tof_hi) / 2) {
+                        let slack = (im.convert(f64::from(s.saturating_sub(1)))
+                            - im.convert(f64::from(s + 1)))
+                        .abs();
+                        assert!(
+                            in_window || (k_lo - slack..=k_hi + slack).contains(&k),
+                            "scan {s} (1/K0 {k}) kept beyond the pad"
+                        );
+                    }
+                }
+                assert!(!gate.contains(bx.scan_lo, bx.tof_lo.saturating_sub(1)) || bx.tof_lo == 0);
+                assert!(!gate.contains(bx.scan_lo, bx.tof_hi + 1));
+                assert!(
+                    tof_lo.saturating_sub(bx.tof_lo) <= 1 && bx.tof_hi.saturating_sub(tof_hi) <= 1
+                );
+            }
+        }
     }
 
     #[test]

@@ -35,7 +35,7 @@ impl PolygonGate {
     /// * `im_at_scan(s)` — the `1/K0` of mobility scan `s` (run calibration).
     /// * `mz_to_tof(mz)` — the fractional TOF index of an m/z; must be monotonic
     ///   increasing (it is, for the timsTOF √-law calibration).
-    /// * `mz_pad` widens each in-polygon m/z interval by this many Da per side and
+    /// * `mz_pad` widens each in-polygon m/z interval by this many Th per side and
     ///   `im_pad` widens the test by this much `1/K0` per side, so a precursor near
     ///   an edge keeps its isotopic envelope / mobility spread. `0.0`/`0.0`
     ///   reproduces the literal polygon. With both pads the gate is the polygon's
