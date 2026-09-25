@@ -2,6 +2,12 @@
 
 Status: **in progress, 2026-09-23.** v0.3.0's record is kept below.
 
+From 0.5.0 the workspace publishes two crates, `dnoise-core` and `dnoise`, at
+the same version. Bump `dnoise-core/Cargo.toml`'s `version` and the
+`dnoise-core` dependency's `version` in `Cargo.toml` with the rest, and run
+`cargo publish --dry-run --locked -p dnoise-core` in the local gate.
+`release.yml` publishes `dnoise-core` before `dnoise`.
+
 ## Steps
 
 1. Version 0.4.0 in `Cargo.toml`, `dnoise-gui/Cargo.toml` and `Cargo.lock`,

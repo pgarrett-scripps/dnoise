@@ -31,14 +31,14 @@ The CLI defaults used in the benchmark are:
 5. Encode every frame in its original order and update the database metadata.
 
 MS/MS filtering, frame averaging, smoothing, centroiding, and cropping are
-optional. The library API uses [`Stages::default`](src/params.rs), which leaves
+optional. The library API uses [`Stages::default`](dnoise-core/src/params.rs), which leaves
 all optional stages off; the CLI deliberately enables the benchmarked halo and
 acquisition-aware MS1 gates.
 
 ## Ion-mobility streak filter
 
-The core implementation is [`filter_once`](src/filter.rs), repeated by
-[`filter_iterated`](src/filter.rs).
+The core implementation is [`filter_once`](dnoise-core/src/filter.rs), repeated by
+[`filter_iterated`](dnoise-core/src/filter.rs).
 
 For every unique TOF index `c`, one pass:
 

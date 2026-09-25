@@ -19,6 +19,20 @@ acquisition gates, both widening what is kept near a gate edge:
   --dia-ms1-im-pad 0` (the 0.1 1/K0 reach cannot be restored).
 
 ### Added
+- **New crate `dnoise-core`**: the in-memory denoising stages, split out of
+  `dnoise` so other programs can embed them. It does no I/O and depends only on
+  `serde` and `thiserror`: no `timsrust`, SQLite, zstd or rayon, and no crate
+  with native code or a `links` key (checked in CI). The motivating user is
+  sage-plus, which reads frames with its own `timsrust` 0.6.6 and `rusqlite`
+  0.35 and calls the core per frame, in memory. Its entry point is
+  `dnoise_core::Denoiser`: built once per run from plain frame metadata and
+  the parameters, then one call per MS1 or MS/MS frame. The `dnoise` CLI and
+  library call the same `Denoiser`, so there is one code path; output is
+  byte-identical to before the split. `dnoise-core/README.md` documents which
+  state crosses frames. `dnoise` keeps all I/O (the timsrust adapter, SQLite,
+  the codec, the writer, provenance, batch, CLI) and re-exports the moved
+  modules and types at their old paths (`dnoise::filter`, `dnoise::params`,
+  `dnoise::FlatFrame`, ...).
 - Polygon gate: with `im_pad > 0` the padded gate takes the polygon's exact m/z
   extent over the whole `±im_pad` band at every scan, instead of sampling only
   three scan lines (which dropped a thin spike or sharp vertex between them).
@@ -50,6 +64,10 @@ acquisition gates, both widening what is kept near a gate edge:
   configs still load, ignored with a warning, never written to the recipe.
 
 ### Removed
+- `dnoise::FrameCtx` and `dnoise::process_frame_decoded`. Neither could be used
+  outside the crate (`FrameCtx` had private fields and no constructor); use
+  `RunContext::process` or `dnoise_core::Denoiser`. `dnoise::DecodedFrame` is
+  now `dnoise_core::DecodedFrame`, re-exported at the same path.
 - `overlap_reach` from `Ms1PolygonParams` and `DiaMs1WindowParams`, and the
   `reach` argument of `overlap::extend_to_features`. `PolygonGate::overlap` and
   `DiaMs1Gate::overlap` are now `bool`.

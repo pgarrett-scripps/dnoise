@@ -4,8 +4,9 @@ name: Release
 # create v0.3.0 --notes-file <(...)`) and this runs. Creating the release makes
 # the tag, so there is nothing to tag separately: the release IS the trigger.
 # It builds per-OS binaries (dnoise CLI + dnoise-gui), attaches them to that
-# release, and publishes the `dnoise` crate to crates.io. Draft releases do not
-# fire; publishing one later does.
+# release, and publishes the `dnoise-core` and then the `dnoise` crate to
+# crates.io (dnoise depends on that exact dnoise-core version). Draft releases
+# do not fire; publishing one later does.
 #
 # Manual runs (workflow_dispatch) build the same artifacts and upload them as
 # workflow artifacts only, releasing and publishing nothing.
@@ -13,7 +14,7 @@ name: Release
 # The per-OS builds are a matrix, and the matrix never touches the release:
 # three runners racing to attach assets to one release is how you get a
 # half-populated release. One job downloads all three archives, checks it has
-# all three, attaches them, and only then publishes the crate. That order is
+# all three, attaches them, and only then publishes the crates. That order is
 # deliberate: assets can be replaced and a release can be deleted, but a crate
 # version cannot be unpublished, only yanked.
 #
@@ -93,7 +94,7 @@ jobs:
           path: dist/*
 
   release:
-    name: attach the binaries and publish the crate
+    name: attach the binaries and publish the crates
     # Skipped on workflow_dispatch: there is no release to attach anything to.
     needs: build
     if: github.event_name == 'release'
@@ -123,18 +124,20 @@ jobs:
             exit 1
           fi
 
-      # The release names the version; Cargo.toml has to agree, or the crate
+      # The release names the version; both crates have to agree, or what is
       # published below would not be the thing the release says it is.
-      - name: Tag and crate version must match
+      - name: Tag and crate versions must match
         run: |
           tag="${{ github.event.release.tag_name }}"
           want="${tag#v}"
-          have=$(cargo metadata --no-deps --format-version 1 \
-                 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
-          if [ "$want" != "$have" ]; then
-            echo "release is tagged $tag but Cargo.toml says $have" >&2
-            exit 1
-          fi
+          for crate in dnoise dnoise-core; do
+            have=$(cargo metadata --no-deps --format-version 1 \
+                   | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == sys.argv[1]))' "$crate")
+            if [ "$want" != "$have" ]; then
+              echo "release is tagged $tag but $crate is $have" >&2
+              exit 1
+            fi
+          done
 
       # Attach to the release that triggered this. The release already carries
       # its own notes, written when it was published, so nothing here touches
@@ -147,8 +150,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
 
-      # Irreversible step last, and only once the release above exists.
-      - name: Publish the crate
+      # Irreversible steps last, and only once the release above exists.
+      # dnoise-core first: dnoise depends on it by version. cargo publish waits
+      # until the new version is in the index before returning.
+      - name: Publish dnoise-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo +1.97.1 publish --package dnoise-core --locked
+
+      - name: Publish dnoise
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo +1.97.1 publish --package dnoise --locked

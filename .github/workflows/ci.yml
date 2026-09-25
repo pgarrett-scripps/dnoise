@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +1.85.0 check --all-targets --locked
+      - run: cargo +1.85.0 check -p dnoise -p dnoise-core --all-targets --locked
 
   # What a crate consumer actually gets. `cargo +1.97.1 test --workspace --locked` always builds
   # with default features, so nothing here exercised the library without the CLI
@@ -68,13 +68,24 @@ jobs:
       - run: cargo +stable check --no-default-features --locked
       - run: cargo +stable test --no-default-features --lib --locked
 
+  # sage-plus embeds dnoise-core next to its own timsrust and SQLite; the core
+  # must stay free of I/O and native code (and of rayon, whose rayon-core has
+  # a `links` key).
+  core-deps:
+    name: dnoise-core has no I/O or native dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: .github/scripts/check-core-deps.sh
+
   stable:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +stable test --locked -p dnoise
+      - run: cargo +stable test --locked -p dnoise -p dnoise-core
 
   audit:
     runs-on: ubuntu-latest

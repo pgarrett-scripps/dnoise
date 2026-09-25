@@ -2,6 +2,8 @@ name: Publish existing release crate
 
 # Recover crate publication without moving an already archived release tag or
 # rebuilding its binaries. The selected release must already have all downloads.
+# Publishes dnoise-core (unless that version is already on crates.io, e.g. when
+# only the dnoise publish failed) and then dnoise.
 on:
   workflow_dispatch:
     inputs:
@@ -38,11 +40,30 @@ jobs:
           package = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]
           assert package["name"] == "dnoise"
           assert "v" + package["version"] == os.environ["RELEASE_TAG"], "tag and crate version differ"
+          core = pathlib.Path("dnoise-core/Cargo.toml")
+          if core.exists():  # releases before 0.5.0 have no dnoise-core
+              core_package = tomllib.loads(core.read_text())["package"]
+              assert core_package["name"] == "dnoise-core"
+              assert core_package["version"] == package["version"], "dnoise-core and dnoise versions differ"
           PY
           test -z "$(git status --porcelain)"
 
       - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
+
+      # dnoise depends on dnoise-core by version, so the core goes first.
+      - name: Publish dnoise-core from the release tag
+        if: hashFiles('dnoise-core/Cargo.toml') != ''
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          if curl -fsS https://index.crates.io/dn/oi/dnoise-core \
+               | python3 -c 'import json,sys; sys.exit(0 if any(json.loads(l)["vers"] == sys.argv[1] for l in sys.stdin if l.strip()) else 1)' "$version"; then
+            echo "dnoise-core $version is already on crates.io; skipping"
+          else
+            cargo +1.97.1 publish --package dnoise-core --locked
+          fi
 
       - name: Publish the crate from the release tag
         env:

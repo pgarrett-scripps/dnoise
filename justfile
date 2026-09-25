@@ -22,6 +22,10 @@ lint:
 format:
   cargo fmt
 
+# Fail if dnoise-core gained an I/O or native dependency
+core-deps:
+  .github/scripts/check-core-deps.sh
+
 # Check formatting without modifying files
 format-check:
   cargo fmt --check
