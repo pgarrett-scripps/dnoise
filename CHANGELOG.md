@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Frames are read with `sage-plus-tdf`, our fork of timsrust 0.6.6 reduced to
+  a pure-Rust reader of frames, calibration and metadata, in place of
+  `timsrust-tdf` 0.6.6. Decoded frames are identical on the benchmark and
+  platform runs. The fork does not link timsrust's `object_store`, `tokio` or
+  `arrow` stack, so the `cargo audit` ignores for RUSTSEC-2026-0194/0195 are
+  gone. It is pinned by git revision because it is not on crates.io.
+
 ## [0.5.0] - 2026-09-25
 
 **Default output changes on ddaPASEF and diaPASEF.** The halo filter's default

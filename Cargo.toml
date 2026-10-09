@@ -48,12 +48,10 @@ dnoise-core = { path = "dnoise-core", version = "0.5.0" }
 rayon = "1.12.0"
 rusqlite = { version = "0.35", features = ["bundled"] }
 thiserror = "2.0.18"
-# Only the TDF reader sub-crate: the `timsrust` facade adds the centroid,
-# miniTDF, TSF and parquet-spectra readers dnoise does not use. Note that
-# timsrust-core's `io` feature (required by timsrust-tdf) enables
-# `filemanager` with its default features, so the object_store/tokio stack is
-# still linked; no feature combination avoids that in 0.6.6.
-timsrust-tdf = { version = "0.6.6", default-features = false }
+# Bruker TDF frame reader: our fork of MannLabs timsrust 0.6.6, reduced to
+# reading frames, calibration and metadata (pure Rust, no async or cloud
+# stack). Not on crates.io, so it is pinned by git revision.
+sage-plus-tdf = { git = "https://github.com/pgarrett-scripps/sage-plus-tdf", rev = "2120893d3ef0e2744176a4da72651473a1504ad5" }
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
 # unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.

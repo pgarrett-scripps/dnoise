@@ -1,12 +1,11 @@
-//! Thin adapter over `timsrust` 0.6.
+//! Thin adapter over `sage-plus-tdf`, our fork of timsrust 0.6.6.
 //!
-//! timsrust 0.6 split into sub-crates and changed the reader API: frames are
-//! indexed by `Frames.Id` (1-based) instead of position, ion arrays are typed
-//! newtypes behind accessors, and the metadata no longer carries the m/z and
-//! 1/K0 converters. Its converters also take integer indices and truncate on
-//! the inverse, and the linear 1/K0 line ends at `max(NumScans) - 1` instead
-//! of `max(NumScans)`. dnoise needs fractional inverses and must reproduce
-//! earlier output, so this module keeps the 0.4 shapes and formulas:
+//! The reader indexes frames by `Frames.Id` (1-based) and carries no m/z or
+//! 1/K0 converters of the shape dnoise uses. timsrust 0.6's converters take
+//! integer indices and truncate on the inverse, and its linear 1/K0 line ends
+//! at `max(NumScans) - 1` instead of `max(NumScans)`. dnoise needs fractional
+//! inverses and must reproduce earlier output, so this module keeps timsrust
+//! 0.4's shapes and formulas:
 //!
 //! - [`FrameReader::get`] takes the 0-based position (`Frames.Id - 1` order);
 //! - [`Frame`] exposes plain `scan_offsets` / `tof_indices` / `intensities`;
@@ -135,8 +134,8 @@ pub struct FrameReaderError(String);
 
 /// Frame reader indexed by 0-based position in `Frames.Id` order.
 pub struct FrameReader {
-    inner: timsrust_tdf::TdfFrameReader,
-    ids: Vec<usize>,
+    inner: sage_plus_tdf::TdfReader,
+    ids: Vec<u64>,
 }
 
 impl std::fmt::Debug for FrameReader {
@@ -148,33 +147,28 @@ impl std::fmt::Debug for FrameReader {
 }
 
 impl FrameReader {
-    /// Open the `.d` folder `path`.
+    /// Open the `.d` folder `path`, or the folder holding the `analysis.tdf`
+    /// that `path` names.
     ///
-    /// Like timsrust 0.4.2, only `TimsCompressionType` 2 is accepted. The
-    /// compression type is read here directly so timsrust's `Metadata::new`
-    /// (which builds per-frame info) is not needed.
+    /// Like timsrust 0.4.2, only `TimsCompressionType` 2 is accepted; the
+    /// reader also decodes LZF (type 1), which dnoise cannot write back.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, FrameReaderError> {
         let p = path.as_ref();
-        let s = p
-            .to_str()
-            .ok_or_else(|| FrameReaderError(format!("non UTF-8 path {}", p.display())))?;
-        let tdf = if p.is_dir() {
-            p.join("analysis.tdf")
+        let dir = if p.is_dir() {
+            p
         } else {
-            p.to_path_buf()
+            p.parent().unwrap_or(p)
         };
-        let compression_type = read_compression_type(&tdf)?;
+        let inner =
+            sage_plus_tdf::TdfReader::open(dir).map_err(|e| FrameReaderError(e.to_string()))?;
+        let compression_type = inner.compression_type();
         if compression_type != 2 {
             return Err(FrameReaderError(format!(
                 "Compression type {compression_type} not understood"
             )));
         }
-        let inner = timsrust_tdf::TdfFrameReader::without_metadata(s, compression_type, 0)
-            .map_err(|e| FrameReaderError(e.to_string()))?;
-        // `iter_indices` yields `Frames.Id` in HashMap order; sort so position
-        // `i` is the i-th frame by Id, which is 0.4.2's `get(i)` order.
-        let mut ids: Vec<usize> = inner.iter_indices().collect();
-        ids.sort_unstable();
+        // `frames()` is sorted by Id, so position `i` is 0.4.2's `get(i)`.
+        let ids = inner.frames().map(|f| f.id).collect();
         Ok(Self { inner, ids })
     }
 
@@ -194,32 +188,15 @@ impl FrameReader {
             .ids
             .get(i)
             .ok_or_else(|| FrameReaderError(format!("frame index {i} out of bounds")))?;
-        let ions = self
+        let f = self
             .inner
-            .get_ions(id)
+            .read_frame(id)
             .map_err(|e| FrameReaderError(e.to_string()))?;
         Ok(Frame {
-            index: id,
-            scan_offsets: ions.scan_offsets().clone(),
-            tof_indices: ions.tof_indices().iter().map(|&t| u32::from(t)).collect(),
-            intensities: ions.intensities().iter().map(|&x| u32::from(x)).collect(),
+            index: id as usize,
+            scan_offsets: f.scan_offsets,
+            tof_indices: f.tof_indices,
+            intensities: f.intensities,
         })
     }
-}
-
-/// `GlobalMetadata.TimsCompressionType`, parsed as 0.4.2 did (TEXT -> `u8`).
-fn read_compression_type(tdf: &Path) -> Result<u8, FrameReaderError> {
-    let err = |e: &dyn std::fmt::Display| FrameReaderError(e.to_string());
-    let conn =
-        Connection::open_with_flags(tdf, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| err(&e))?;
-    let value: String = conn
-        .query_row(
-            "SELECT Value FROM GlobalMetadata WHERE Key='TimsCompressionType'",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|_| err(&"Key not found: TimsCompressionType"))?;
-    value
-        .parse()
-        .map_err(|_| err(&"Key not parsable: TimsCompressionType"))
 }
