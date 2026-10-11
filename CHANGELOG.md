@@ -6,8 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-11
+
 ### Changed
-- Frames are read with `sage-plus-tdf`, our fork of timsrust 0.6.6 reduced to
+- Bruker frames are read with `sage-plus-tdf`, our fork of timsrust 0.6.6 reduced to
   a pure-Rust reader of frames, calibration and metadata, in place of
   `timsrust-tdf` 0.6.6. Decoded frames are identical on the benchmark and
   platform runs. The fork does not link timsrust's `object_store`, `tokio` or
@@ -342,7 +344,8 @@ First public release.
 - The SQLite `tdf` plumbing is now crate-private. The type-2 codec moved to the
   public `dnoise::codec` module (`dnoise::tdf::encode::*` → `dnoise::codec::*`).
 
-[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pgarrett-scripps/dnoise/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.3.0
