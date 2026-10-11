@@ -6,7 +6,7 @@ resolver = "2"
 name = "dnoise"
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 authors = ["Patrick Garrett <pgarrett@scripps.edu>"]
 description = "Denoise Bruker timsTOF .d folders with an iterative vertical ion-mobility feature filter (CLI + library)."
 repository = "https://github.com/pgarrett-scripps/dnoise"
@@ -50,8 +50,8 @@ rusqlite = { version = "0.35", features = ["bundled"] }
 thiserror = "2.0.18"
 # Bruker TDF frame reader: our fork of MannLabs timsrust 0.6.6, reduced to
 # reading frames, calibration and metadata (pure Rust, no async or cloud
-# stack). Not on crates.io, so it is pinned by git revision.
-sage-plus-tdf = { git = "https://github.com/pgarrett-scripps/sage-plus-tdf", rev = "2120893d3ef0e2744176a4da72651473a1504ad5" }
+# stack). Needs rustc 1.97.
+sage-plus-tdf = "0.2.0"
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
 # unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.

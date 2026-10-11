@@ -12,7 +12,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `timsrust-tdf` 0.6.6. Decoded frames are identical on the benchmark and
   platform runs. The fork does not link timsrust's `object_store`, `tokio` or
   `arrow` stack, so the `cargo audit` ignores for RUSTSEC-2026-0194/0195 are
-  gone. It is pinned by git revision because it is not on crates.io.
+  gone.
+- Minimum supported Rust for the library and CLI is now 1.97 (was 1.88),
+  because `sage-plus-tdf` requires it. `dnoise-core` stays at 1.85.
 
 ## [0.5.0] - 2026-09-25
 
