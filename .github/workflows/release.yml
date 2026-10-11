@@ -54,7 +54,7 @@ jobs:
             ext: ".exe"
             archive: zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux GUI deps
         if: runner.os == 'Linux'
@@ -100,7 +100,7 @@ jobs:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Every matrix job's package, back in one place. Each uploaded its own
       # named artifact containing a single archive. Keep them outside the source
