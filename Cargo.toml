@@ -4,9 +4,9 @@ resolver = "2"
 
 [package]
 name = "dnoise"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 authors = ["Patrick Garrett <pgarrett@scripps.edu>"]
 description = "Denoise Bruker timsTOF .d folders with an iterative vertical ion-mobility feature filter (CLI + library)."
 repository = "https://github.com/pgarrett-scripps/dnoise"
@@ -44,16 +44,14 @@ required-features = ["cli"]
 [dependencies]
 # Library dependencies. The in-memory stages live in dnoise-core (no I/O, no
 # native dependencies); keep its version in lockstep with this crate's.
-dnoise-core = { path = "dnoise-core", version = "0.5.0" }
+dnoise-core = { path = "dnoise-core", version = "0.6.0" }
 rayon = "1.12.0"
 rusqlite = { version = "0.35", features = ["bundled"] }
 thiserror = "2.0.18"
-# Only the TDF reader sub-crate: the `timsrust` facade adds the centroid,
-# miniTDF, TSF and parquet-spectra readers dnoise does not use. Note that
-# timsrust-core's `io` feature (required by timsrust-tdf) enables
-# `filemanager` with its default features, so the object_store/tokio stack is
-# still linked; no feature combination avoids that in 0.6.6.
-timsrust-tdf = { version = "0.6.6", default-features = false }
+# Bruker TDF frame reader: our fork of MannLabs timsrust 0.6.6, reduced to
+# reading frames, calibration and metadata (pure Rust, no async or cloud
+# stack). Needs rustc 1.97.
+sage-plus-tdf = "0.2.0"
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
 # unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.
