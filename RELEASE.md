@@ -1,89 +1,98 @@
-# Releasing v0.5.0
+# Releasing dnoise
 
-Status: **in progress, 2026-09-25.** v0.4.0 was released 2026-09-23 (9d2054c).
+**No release is in progress.** The latest release is v0.6.0, tagged 2026-10-11 at
+`3c1772e`, archived as
+[10.5281/zenodo.23301791](https://doi.org/10.5281/zenodo.23301791).
 
-From 0.5.0 the workspace publishes two crates, `dnoise-core` and `dnoise`, at
-the same version. Bump `dnoise-core/Cargo.toml`'s `version` and the
-`dnoise-core` dependency's `version` in `Cargo.toml` with the rest, and run
-`cargo publish --dry-run --locked -p dnoise-core` in the local gate.
-`release.yml` publishes `dnoise-core` before `dnoise`.
+The workspace publishes two crates at the same version, `dnoise-core` and
+`dnoise`, and `release.yml` publishes `dnoise-core` first. `dnoise-gui` is not
+published to crates.io and ships only as an attached binary archive.
 
-## Steps
+## Steps for version X.Y.Z
 
-1. Version 0.5.0 in `Cargo.toml`, `dnoise-core/Cargo.toml`, `dnoise-gui/Cargo.toml` and `Cargo.lock`,
-   then `just cite-sync` to copy it and today's date into `CITATION.cff`;
-   `CHANGELOG.md` has a dated 0.5.0 section and `[Unreleased]` is empty.
+1. Set X.Y.Z in `Cargo.toml`, `dnoise-core/Cargo.toml`, `dnoise-gui/Cargo.toml`,
+   the `dnoise-core` dependency's `version` in `Cargo.toml`, and `Cargo.lock`.
+   Run `just cite-sync` to copy the version and today's date into `CITATION.cff`,
+   which CI's citation job checks against `Cargo.toml`. `CHANGELOG.md` needs a
+   dated X.Y.Z section and an empty `[Unreleased]`.
 2. Local gate: `cargo fmt --all --check`, `cargo clippy --workspace
    --all-targets -- -D warnings`, `cargo test --release --workspace`,
+   `cargo publish --dry-run --locked -p dnoise-core`, then
    `cargo publish --dry-run --locked --workspace`.
-3. Push `release/0.5.0`, open a PR to `main`, wait for CI to pass, then
-   fast-forward `main` so the tagged commit is the one tested.
-4. `gh release create v0.5.0 --target main` with the 0.5.0 changelog as notes.
-   `release.yml` attaches the binaries and publishes `dnoise-core` then `dnoise`; Zenodo mints the
-   version DOI.
-5. Cite the version DOI in the paper. `CITATION.cff` and `README.md` use the
-   concept DOI, so no DOI changes there.
+3. Push `release/X.Y.Z`, open a PR to `main`, wait for CI to pass, then
+   fast-forward `main` so the tagged commit is the one CI tested.
+4. `gh release create vX.Y.Z --target main` with that version's changelog section
+   as the notes. `release.yml` attaches the binaries, publishes `dnoise-core` and
+   then `dnoise`, and Zenodo mints the version DOI. A pending DOI or a 409 is
+   normal, so never release the same version twice. Stage any downloaded binary
+   archives outside the checkout: a populated `dist/` once made Cargo reject the
+   source as dirty.
+5. Add the version DOI to the table below and cite it from whatever is pinned to
+   that version. `CITATION.cff` and `README.md` carry the concept DOI
+   `10.5281/zenodo.21959649`, which resolves to the latest release, so they need
+   no DOI change per release.
 
-## Output changes from 0.4.0
+## Released versions
 
-Default output changes on both acquisition types: halo `peak_fraction` 0.10,
-MS1 gates padded 3 Th / 0.015 1/K0 with unlimited feature reach, and the MS1
-stage order streak, gate, halo. See the 0.5.0 CHANGELOG entry. The crate split
-and the timsrust-tdf port alone are byte-identical to 0.4.0 on the 5-minute
-benchmark runs.
+| Version | Date | Tag commit | Version DOI | Default output |
+|---|---|---|---|---|
+| 0.6.0 | 2026-10-11 | `3c1772e` | [10.5281/zenodo.23301791](https://doi.org/10.5281/zenodo.23301791) | unchanged from 0.5.0 |
+| 0.5.0 | 2026-09-25 | `9beeb3d` | [10.5281/zenodo.22965157](https://doi.org/10.5281/zenodo.22965157) | **changed** on both acquisition types |
+| 0.4.0 | 2026-09-23 | `9d2054c` | [10.5281/zenodo.22929326](https://doi.org/10.5281/zenodo.22929326) | **changed** on both acquisition types |
+| 0.3.0 | 2026-09-14 | `f14fbc2` | [10.5281/zenodo.22756840](https://doi.org/10.5281/zenodo.22756840) | **changed** on diaPASEF MS/MS |
+| 0.1.0 | 2026-08-15 | `fa750c9` | [10.5281/zenodo.21959650](https://doi.org/10.5281/zenodo.21959650) | original paper submission |
+
+The manuscript is pinned to v0.4.0. Use the v0.1.0 record for the original
+submission's results. Each "changed" row is spelled out in that version's
+[CHANGELOG.md](CHANGELOG.md) entry, with the flags that restore the previous
+defaults where they can be restored.
+
+Within 0.5.0 and 0.6.0, two changes were checked to leave output alone: the
+`dnoise-core` crate split and the move off `timsrust-tdf` are byte-identical to
+0.4.0 on the 5-minute benchmark runs. What changed the output in 0.5.0 was the
+halo `peak_fraction` default of 0.10, the MS1 gate pads of 3 Th and 0.015 1/K0
+with unlimited feature reach, and the MS1 stage order of streak, gate, halo.
 
 ---
 
-# v0.3.0 release record
+# Release records
 
-Status: **released on 2026-09-14.** GitHub binaries, the crates.io package,
-and the Zenodo archive are published.
+## v0.3.0
+
+Released on 2026-09-14. GitHub binaries, the crates.io package, and the Zenodo
+archive are published.
 
 - [GitHub v0.3.0](https://github.com/pgarrett-scripps/dnoise/releases/tag/v0.3.0)
   tags commit `f14fbc22f301f9600b93da62560bac6bbea19b04`.
-- [Zenodo v0.3.0](https://doi.org/10.5281/zenodo.22756840) is published; the
+- [Zenodo v0.3.0](https://doi.org/10.5281/zenodo.22756840) is published. The
   downloaded archive's checksum, source commit, version, and Windows fix were verified.
-- The all-version DOI remains `10.5281/zenodo.21959649`. The immutable v0.1.0
-  archive is `10.5281/zenodo.21959650`; use that record for the original paper results.
 - [crates.io v0.3.0](https://crates.io/crates/dnoise/0.3.0) was published by
   [recovery run 34887161343](https://github.com/pgarrett-scripps/dnoise/actions/runs/34887161343).
+- The diaPASEF MS/MS arm of the paper was produced with v0.1.0, before the
+  `read_dia_windows` fix below. Decision of 2026-09-22: that arm is not rerun,
+  and the manuscript discloses it in the text instead. Nothing here blocks a
+  software release.
 
-## Still to do
-
-1. **Re-derive the paper's diaPASEF MS/MS arm.** 0.3.0 fixes a v0.1.0 defect in
-   that arm (see below), so the manuscript's optional-fragment-denoising numbers
-   were produced by the buggy path. The paper currently says so in its
-   availability statement and SI. Tracked in the paper repo's `TODO.md`, which
-   has the ordered steps. This does not block the software release, only the
-   claim that the paper and the release agree everywhere.
-
-## Done
+### Verified at the time
 
 - Fixed Windows batch preflight, which queried an incomplete canonical drive
   prefix. Added regression coverage for canonical paths and missing children.
   All eight [CI checks](https://github.com/pgarrett-scripps/dnoise/actions/runs/34884608764)
   passed, including formatting, Clippy, and workspace tests on Linux, macOS,
-  and Windows; MSRV, library-only, stable, dependency audit, and SDK-comparison checks.
+  and Windows, plus MSRV, library-only, stable, dependency audit, and
+  SDK-comparison checks.
 - Repeated local formatting, Clippy, and workspace tests successfully. The final
   `cargo publish --dry-run --locked` verified 89 files (949.3 KiB uncompressed).
-- Published the GitHub release with the 0.3.0 changelog as its notes. Updated
-  `README.md` and `CITATION.cff` with the version-specific Zenodo DOI.
+- Published the GitHub release with the 0.3.0 changelog as its notes.
 - All three platform test/build jobs passed and the CLI/GUI archives are attached.
-  The downloaded Linux CLI reports `dnoise 0.3.0`; its archive SHA-256 matches
+  The downloaded Linux CLI reports `dnoise 0.3.0`, and its archive SHA-256 matches
   the digest on the published GitHub asset.
 - Installed the published crate with `cargo install dnoise --version 0.3.0 --locked`
-  into an isolated temporary directory; the installed command reports `dnoise 0.3.0`.
+  into an isolated temporary directory. The installed command reports `dnoise 0.3.0`.
 - Fixed a packaging-workflow issue: downloaded binary archives in `dist/` made
-  Cargo reject the source checkout as dirty. Future releases stage downloads
+  Cargo reject the source checkout as dirty. Later releases stage downloads
   outside the checkout. Published this crate from the unchanged v0.3.0 tag using
   the recovery workflow, which checks the release downloads and package version.
-- Updated the local paper and SI release links, preserving the v0.1.0 benchmark
-  reference. The manuscript's existing unresolved diaPASEF rerun note blocks
-  `just paper`; `just verify` also reports existing declaration and stale-output
-  issues. These do not block the software release.
-- Version bumped to 0.3.0 in `Cargo.toml`, `dnoise-gui/Cargo.toml`, `CITATION.cff`
-  (with `date-released`).
-- `CHANGELOG.md` has a dated 0.3.0 section; `[Unreleased]` is empty.
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   and `cargo test --release` (161 tests) all pass.
 - `cargo publish --dry-run` packages cleanly (87 files, 939 KiB).
