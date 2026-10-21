@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # System libraries the egui/eframe GUI links against on Linux.
       - name: Install Linux GUI deps
@@ -50,7 +50,7 @@ jobs:
     name: MSRV (dnoise-core 1.85; library + CLI 1.97)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
@@ -65,7 +65,7 @@ jobs:
     name: library only (--no-default-features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo +stable check --no-default-features --locked
@@ -78,14 +78,14 @@ jobs:
     name: dnoise-core has no I/O or native dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: .github/scripts/check-core-deps.sh
 
   stable:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo +stable test --locked -p dnoise -p dnoise-core
@@ -93,7 +93,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo +stable install cargo-audit --locked
@@ -103,7 +103,7 @@ jobs:
     name: SDK comparison logic (no proprietary SDK required)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -117,7 +117,7 @@ jobs:
     name: CITATION.cff matches Cargo.toml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: |
           crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           cff=$(sed -n 's/^version: //p' CITATION.cff)
