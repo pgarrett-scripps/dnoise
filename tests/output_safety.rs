@@ -36,6 +36,9 @@ fn invalid_input_preserves_existing_output() {
     std::fs::write(input.join("analysis.tdf"), b"invalid").unwrap();
     let out = root.path().join("output.d");
     std::fs::create_dir(&out).unwrap();
+    // Only an empty folder or a .d folder is replaceable, so this stands in for
+    // a previous run's output.
+    std::fs::write(out.join("analysis.tdf"), b"previous").unwrap();
     std::fs::write(out.join("keep"), b"original").unwrap();
     assert!(
         denoise(
@@ -56,6 +59,9 @@ fn cancellation_preserves_existing_output() {
     let input = common::fixture(root.path(), "input.d", false);
     let out = root.path().join("output.d");
     std::fs::create_dir(&out).unwrap();
+    // Only an empty folder or a .d folder is replaceable, so this stands in for
+    // a previous run's output.
+    std::fs::write(out.join("analysis.tdf"), b"previous").unwrap();
     std::fs::write(out.join("keep"), b"original").unwrap();
     let cancel = AtomicBool::new(false);
     let options = RunOptions {
@@ -131,6 +137,7 @@ fn copy_failure_discards_staging_without_touching_existing_output() {
     std::os::unix::fs::symlink(&external, input.join("linked-file")).unwrap();
     let output = root.path().join("output.d");
     std::fs::create_dir(&output).unwrap();
+    std::fs::write(output.join("analysis.tdf"), b"previous").unwrap();
     std::fs::write(output.join("keep"), b"old output").unwrap();
     assert!(
         denoise(

@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **`--force` could delete the input `.d`.** The input/output overlap check
+  compared resolved paths, and `canonicalize` resolves symlinks but not bind
+  mounts, hard links or substituted drives. Two paths naming one folder by
+  different routes passed the check, and the install then renamed the input into
+  a backup folder and deleted it. Input and output are now compared by file
+  identity (device and inode, or volume serial and file index on Windows)
+  against the destination and each of its existing ancestors, in both
+  directions, before the run and again at the install. This also covers the CLI,
+  `dnoise batch`, the GUI's Overwrite option and `--report` paths, which all
+  share the check.
+- **`--force` replaced any existing directory and then deleted it**, so an
+  output path pointing at an ordinary folder destroyed it. A destination is now
+  replaceable only when it is empty or holds `analysis.tdf`, that is, when it is
+  a `.d` folder an earlier run could have written. The check runs again at the
+  install, because the run takes minutes.
+- **`--dia-window` / `--dda-window` passed without `--denoise-msms` or
+  `--all-frames` dropped out-of-window MS/MS points** while `--help`,
+  `docs/reference.md` and the recorded `active_gates` all reported the gate
+  inactive. Both gates only read MS/MS frames, so neither is built now unless
+  MS/MS frames are filtered, which is the documented behaviour. `--no-dia-window`
+  and `--no-dda-window` are unchanged, and MS1 output is unaffected. Default
+  runs, and the manuscript's v0.4.0 settings, never reached this path.
+
 ## [0.6.0] - 2026-10-11
 
 ### Changed

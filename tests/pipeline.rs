@@ -44,6 +44,8 @@ fn skipping_full_validation_still_checks_structure_and_protects_files() {
     let input = common::fixture(root.path(), "input.d", false);
     let output = root.path().join("output.d");
     std::fs::create_dir(&output).unwrap();
+    // Only an empty folder or a .d folder is replaceable.
+    std::fs::write(output.join("analysis.tdf"), b"previous").unwrap();
     std::fs::write(output.join("keep"), b"original").unwrap();
     let config = Config::default().resolve(&input).unwrap();
     let db = rusqlite::Connection::open(input.join("analysis.tdf")).unwrap();

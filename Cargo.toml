@@ -58,6 +58,10 @@ sage-plus-tdf = "0.2.0"
 tracing = "0.1"
 zstd = "0.13.3"
 tempfile = "3.27"
+# File identity (device + inode on Unix, volume serial + file index on Windows)
+# so the input/output overlap check sees through bind mounts, hard links and
+# drive substitutions, which `canonicalize` does not resolve.
+same-file = "1.0.6"
 
 # CLI dependencies and shared provenance serialization.
 anyhow = { version = "1.0.102", optional = true }

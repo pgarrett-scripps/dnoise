@@ -1073,6 +1073,7 @@ dependencies = [
  "rayon",
  "rusqlite",
  "sage-plus-tdf",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",

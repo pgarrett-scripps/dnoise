@@ -173,6 +173,56 @@ mod tests {
         assert!(!s.contains("overlap_reach"));
     }
 
+    /// An out-of-window gate asked for on its own must stay off: it only reads
+    /// MS/MS frames, and the help text and `active_gates` both report it
+    /// inactive when MS/MS frames are not filtered. Before the fix the stage
+    /// was built and dropped every out-of-window MS/MS point.
+    #[test]
+    fn window_gates_need_msms_filtering() {
+        let unused = Path::new("unused.d");
+        for (gate, pick) in [
+            (
+                "dia",
+                (|r: &ResolvedConfig| r.dia_window.is_some()) as fn(&ResolvedConfig) -> bool,
+            ),
+            ("dda", |r: &ResolvedConfig| r.dda_window.is_some()),
+        ] {
+            let mut requested = Config::default();
+            match gate {
+                "dia" => requested.dia_window = Some(true),
+                _ => requested.dda_window = Some(true),
+            }
+            assert!(
+                !pick(&requested.resolve(unused).unwrap()),
+                "{gate} gate must be off without MS/MS filtering"
+            );
+            let mut with_msms = requested.clone();
+            with_msms.denoise_msms = Some(true);
+            assert!(
+                pick(&with_msms.resolve(unused).unwrap()),
+                "{gate} gate must be on with --denoise-msms"
+            );
+            let mut with_all_frames = requested.clone();
+            with_all_frames.all_frames = Some(true);
+            assert!(
+                pick(&with_all_frames.resolve(unused).unwrap()),
+                "{gate} gate must be on with --all-frames"
+            );
+            // The default is still on whenever MS/MS frames are filtered, and
+            // --no-*-window still turns it off.
+            let mut defaulted = Config {
+                denoise_msms: Some(true),
+                ..Config::default()
+            };
+            assert!(pick(&defaulted.resolve(unused).unwrap()));
+            match gate {
+                "dia" => defaulted.dia_window = Some(false),
+                _ => defaulted.dda_window = Some(false),
+            }
+            assert!(!pick(&defaulted.resolve(unused).unwrap()));
+        }
+    }
+
     #[test]
     fn unknown_key_is_rejected() {
         assert!(toml::from_str::<Config>("bogus_key = 3").is_err());
@@ -346,12 +396,16 @@ impl Config {
         let dia_window = DiaWindowParams {
             scan_pad: self.dia_window_scan_pad.unwrap_or(d.scan_pad),
         };
-        let dia_window = self.dia_window.unwrap_or(msms).then_some(dia_window);
+        // Both out-of-window gates only ever read MS/MS frames, so neither can
+        // do anything unless MS/MS frames are filtered. Requesting one on its
+        // own used to drop out-of-window MS/MS points while the help text and
+        // the recorded `active_gates` both called it inactive.
+        let dia_window = (msms && self.dia_window.unwrap_or(true)).then_some(dia_window);
         let d = DdaWindowParams::default();
         let dda_window = DdaWindowParams {
             scan_pad: self.dda_window_scan_pad.unwrap_or(d.scan_pad),
         };
-        let dda_window = self.dda_window.unwrap_or(msms).then_some(dda_window);
+        let dda_window = (msms && self.dda_window.unwrap_or(true)).then_some(dda_window);
         let d = DiaMs1WindowParams::default();
         let dia_ms1 = DiaMs1WindowParams {
             mz_pad: self.dia_ms1_mz_pad.unwrap_or(d.mz_pad),
