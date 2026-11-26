@@ -300,6 +300,8 @@ fn prm_all_frames_is_rejected_without_replacing_output() {
     let input = common::prm_fixture(root.path(), "input.d");
     let output = root.path().join("output.d");
     std::fs::create_dir(&output).unwrap();
+    // Only an empty folder or a .d folder is replaceable.
+    std::fs::write(output.join("analysis.tdf"), b"previous").unwrap();
     std::fs::write(output.join("keep"), b"existing output").unwrap();
     for config in [
         Config {

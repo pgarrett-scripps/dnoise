@@ -63,6 +63,11 @@ pub fn preflight(jobs: &[Job], force: bool) -> Result<()> {
                 "output must be a directory".into(),
             ));
         }
+        // Refuse a destination that is not a replaceable .d folder here, before
+        // any job in the batch writes, rather than when that job installs.
+        if destination.exists() {
+            crate::output::check_replaceable(&destination)?;
+        }
         if !destination.parent().is_some_and(Path::is_dir) {
             return Err(DnoiseError::InvalidInput(format!(
                 "output parent does not exist: {}",

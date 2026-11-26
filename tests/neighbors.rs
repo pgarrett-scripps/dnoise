@@ -52,10 +52,10 @@ fn fixture(root: &Path, kind: &str) -> PathBuf {
             params![
                 id,
                 typ,
-                offset,
+                offset as i64,
                 points.iter().map(|p| p.2).max().unwrap_or(0),
-                points.iter().map(|p| p.2 as u64).sum::<u64>(),
-                points.len()
+                points.iter().map(|p| p.2 as i64).sum::<i64>(),
+                points.len() as i64
             ],
         )
         .unwrap();
@@ -362,7 +362,7 @@ fn replace_points(input: &Path, changes: &[(usize, Points)]) {
     for (i, (scans, points)) in frames.iter().enumerate() {
         let record = dnoise::codec::encode_frame_type2(*scans, points);
         file.write_all(&record).unwrap();
-        db.execute("UPDATE Frames SET TimsId=?1,NumPeaks=?2,MaxIntensity=?3,SummedIntensities=?4 WHERE Id=?5",params![offset,points.len(),points.iter().map(|p|p.2).max().unwrap_or(0),points.iter().map(|p|p.2 as u64).sum::<u64>(),i+1]).unwrap();
+        db.execute("UPDATE Frames SET TimsId=?1,NumPeaks=?2,MaxIntensity=?3,SummedIntensities=?4 WHERE Id=?5",params![offset as i64,points.len() as i64,points.iter().map(|p|p.2).max().unwrap_or(0),points.iter().map(|p|p.2 as i64).sum::<i64>(),i as i64+1]).unwrap();
         offset += record.len();
     }
 }

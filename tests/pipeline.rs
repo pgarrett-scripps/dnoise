@@ -44,6 +44,8 @@ fn skipping_full_validation_still_checks_structure_and_protects_files() {
     let input = common::fixture(root.path(), "input.d", false);
     let output = root.path().join("output.d");
     std::fs::create_dir(&output).unwrap();
+    // Only an empty folder or a .d folder is replaceable.
+    std::fs::write(output.join("analysis.tdf"), b"previous").unwrap();
     std::fs::write(output.join("keep"), b"original").unwrap();
     let config = Config::default().resolve(&input).unwrap();
     let db = rusqlite::Connection::open(input.join("analysis.tdf")).unwrap();
@@ -276,7 +278,7 @@ fn validation_agrees_across_pools_and_rejects_corruption_in_later_batches() {
     for id in 5..=600 {
         db.execute(
             "INSERT INTO Frames SELECT ?1,Time,ScanMode,MsMsType,?2,MaxIntensity,100,NumScans,1,AccumulationTime,MzCalibration,TimsCalibration FROM Frames WHERE Id=1",
-            rusqlite::params![id, offset],
+            rusqlite::params![id, offset as i64],
         ).unwrap();
         binary.write_all(&record).unwrap();
         offset += record.len() as u64;

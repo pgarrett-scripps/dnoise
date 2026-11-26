@@ -6,6 +6,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- Dependency upgrades that clear four of the five `cargo audit` findings that
+  opened against 0.6.0 after its release. `zstd` 0.13.3 to 0.13.6, which brings
+  `zstd-safe` 7.4.2 and `zstd-sys` 2.2.0 with bundled zstd 1.6.0
+  (RUSTSEC-2026-0391, -0399 through -0403 and -0410), and `rusqlite` 0.35 to
+  0.41, which brings `libsqlite3-sys` 0.39.1 and the SQLite fix for
+  CVE-2026-119375 (RUSTSEC-2026-0459), and `sage-plus-tdf` 0.2.0 to 0.2.4, which
+  takes `ruzstd` 0.9.1 (RUSTSEC-2026-0344, a decompression bomb). `cargo audit`
+  reports no vulnerabilities again.
+- Output carries the same data as v0.6.0 but is not byte-identical to it. The
+  bundled zstd went from 1.5.6 to 1.6.0 and re-encodes a minority of frame
+  records to a different length, which shifts the `Frames.TimsId` byte offset of
+  every later frame. Checked on the reader-swap run set: every frame's
+  decompressed type-2 payload and scan count are identical, and every
+  `analysis.tdf` column other than `TimsId` is identical, so point counts, TOF
+  indices and intensities are unchanged. A reader that follows `TimsId`, which is
+  what the Bruker SDK and every timsrust consumer do, sees the same frames.
+
+### Changed
+- rusqlite 0.41 no longer converts `usize` or `u64` to and from SQL, so three
+  internal reads and four test fixtures bind `i64` instead, which is what these
+  TDF columns hold. No public API or output change.
+
+### Fixed
+- **`--force` could delete the input `.d`.** The input/output overlap check
+  compared resolved paths, and `canonicalize` resolves symlinks but not bind
+  mounts, hard links or substituted drives. Two paths naming one folder by
+  different routes passed the check, and the install then renamed the input into
+  a backup folder and deleted it. Input and output are now compared by file
+  identity (device and inode, or volume serial and file index on Windows)
+  against the destination and each of its existing ancestors, in both
+  directions, before the run and again at the install. This also covers the CLI,
+  `dnoise batch`, the GUI's Overwrite option and `--report` paths, which all
+  share the check.
+- **`--force` replaced any existing directory and then deleted it**, so an
+  output path pointing at an ordinary folder destroyed it. A destination is now
+  replaceable only when it is empty or holds `analysis.tdf`, that is, when it is
+  a `.d` folder an earlier run could have written. The check runs again at the
+  install, because the run takes minutes.
+- **`--dia-window` / `--dda-window` passed without `--denoise-msms` or
+  `--all-frames` dropped out-of-window MS/MS points** while `--help`,
+  `docs/reference.md` and the recorded `active_gates` all reported the gate
+  inactive. Both gates only read MS/MS frames, so neither is built now unless
+  MS/MS frames are filtered, which is the documented behaviour. `--no-dia-window`
+  and `--no-dda-window` are unchanged, and MS1 output is unaffected. Default
+  runs, and the manuscript's v0.4.0 settings, never reached this path.
+
 ## [0.6.0] - 2026-10-11
 
 ### Changed

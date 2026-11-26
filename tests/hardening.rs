@@ -23,6 +23,8 @@ fn calibration_guards_cover_gates_crops_streaming_and_protect_output() {
         );
         let output = root.path().join("output.d");
         std::fs::create_dir(&output).unwrap();
+        // Only an empty folder or a .d folder is replaceable.
+        std::fs::write(output.join("analysis.tdf"), b"previous").unwrap();
         std::fs::write(output.join("sentinel"), b"original").unwrap();
         for dry_run in [false, true] {
             let error = denoise_with_options(

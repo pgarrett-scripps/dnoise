@@ -46,18 +46,24 @@ required-features = ["cli"]
 # native dependencies); keep its version in lockstep with this crate's.
 dnoise-core = { path = "dnoise-core", version = "0.6.0" }
 rayon = "1.12.0"
-rusqlite = { version = "0.35", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 thiserror = "2.0.18"
 # Bruker TDF frame reader: our fork of MannLabs timsrust 0.6.6, reduced to
 # reading frames, calibration and metadata (pure Rust, no async or cloud
 # stack). Needs rustc 1.97.
-sage-plus-tdf = "0.2.0"
+# 0.2.2 is the first release that takes ruzstd 0.9.1 (RUSTSEC-2026-0344),
+# so the floor is the real minimum rather than the version first used.
+sage-plus-tdf = "0.2.4"
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
 # unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.
 tracing = "0.1"
 zstd = "0.13.3"
 tempfile = "3.27"
+# File identity (device + inode on Unix, volume serial + file index on Windows)
+# so the input/output overlap check sees through bind mounts, hard links and
+# drive substitutions, which `canonicalize` does not resolve.
+same-file = "1.0.6"
 
 # CLI dependencies and shared provenance serialization.
 anyhow = { version = "1.0.102", optional = true }

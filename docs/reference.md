@@ -78,7 +78,7 @@ so binary offsets stay consistent.
 | `--threads` | all cores | Worker threads. |
 | `--frame-batch-size` | 2048 | Frames encoded per batch; smaller values may lower memory at a runtime cost. |
 | `--config` / `-c` | - | Load parameters from a TOML file (see below). |
-| `--force` | off | Overwrite an existing output folder. |
+| `--force` | off | Replace an existing output folder. Only an empty folder or a `.d` folder (one holding `analysis.tdf`) can be replaced, and never a folder that is the input reached by another path (a bind mount, a hard link or a substituted drive). |
 | `--in-place` | off | Denoise the input folder in place (omit `OUTPUT`, see below). |
 
 ## Acquisition-aware gates (on by default)

@@ -1,6 +1,7 @@
 //! Path checks and owned temporary output. Only completed runs replace files.
 
 use crate::{DnoiseError, Result};
+use same_file::Handle;
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 use tempfile::{Builder, TempDir};
@@ -36,7 +37,14 @@ pub fn resolved_path(path: &Path) -> Result<PathBuf> {
     Ok(result)
 }
 
-/// Reject equal paths and either directory containing the other.
+/// Reject equal paths and either directory containing the other, including the
+/// case where the two paths reach one directory by different routes.
+///
+/// Comparing paths is not enough on its own. `canonicalize` resolves symlinks
+/// but not bind mounts, hard links or drive substitutions, so two paths can
+/// normalize to different strings and still name the same directory. Replacing
+/// such an output deletes the input, so the identity of the files themselves is
+/// compared as well.
 pub fn check_disjoint(input: &Path, output: &Path) -> Result<()> {
     let a = resolved_path(input)?;
     let b = resolved_path(output)?;
@@ -47,7 +55,60 @@ pub fn check_disjoint(input: &Path, output: &Path) -> Result<()> {
             output.display()
         )));
     }
+    check_not_aliased(&a, &b)
+}
+
+/// Identity of an existing file or directory, independent of the path used to
+/// reach it: device and inode on Unix, volume serial number and file index on
+/// Windows. `None` when the path does not exist.
+fn identity(path: &Path) -> Result<Option<Handle>> {
+    match Handle::from_path(path) {
+        Ok(handle) => Ok(Some(handle)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        // A path we may not open cannot be compared. Treat it as unknown rather
+        // than failing a run that never touches it; the open of the real input
+        // or output reports the permission error with its own path.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Reject any pair where one path and the other, or one of the other's existing
+/// ancestors, are the same file on disk. Both directions are checked: the
+/// output can be the input reached another way, and it can also sit inside it.
+fn check_not_aliased(input: &Path, output: &Path) -> Result<()> {
+    for (one, two) in [(input, output), (output, input)] {
+        let Some(id) = identity(one)? else { continue };
+        for ancestor in two.ancestors() {
+            if let Some(other) = identity(ancestor)?
+                && other == id
+            {
+                return Err(DnoiseError::InvalidInput(format!(
+                    "input and output reach the same file on disk by two different \
+                     paths, so writing the output would destroy the input: {} and {} \
+                     (a bind mount, a hard link or a substituted drive)",
+                    one.display(),
+                    ancestor.display()
+                )));
+            }
+        }
+    }
     Ok(())
+}
+
+/// A destination may only be replaced when it is empty or is itself a `.d`
+/// folder. `--force` used to move any existing directory aside and then delete
+/// it, so an output path that pointed at an ordinary folder destroyed it.
+pub(crate) fn check_replaceable(destination: &Path) -> Result<()> {
+    if fs::read_dir(destination)?.next().is_none() || destination.join("analysis.tdf").is_file() {
+        return Ok(());
+    }
+    Err(DnoiseError::InvalidInput(format!(
+        "refusing to replace {}: it is not empty and holds no analysis.tdf, so it is \
+         not a .d folder left by an earlier run; point the output somewhere else, or \
+         remove that folder yourself first",
+        destination.display()
+    )))
 }
 
 pub(crate) struct OutputTransaction {
@@ -55,6 +116,11 @@ pub(crate) struct OutputTransaction {
     destination: PathBuf,
     lock: PathBuf,
     overwrite: bool,
+    /// The resolved input, kept so the destructive step in `commit` can repeat
+    /// the checks against whatever the destination resolves to by then. `None`
+    /// for an in-place run, where input and output are the same folder on
+    /// purpose.
+    guarded_input: Option<PathBuf>,
 }
 
 impl OutputTransaction {
@@ -75,6 +141,9 @@ impl OutputTransaction {
             return Err(DnoiseError::InvalidInput(
                 "output must be a directory".into(),
             ));
+        }
+        if destination.exists() {
+            check_replaceable(&destination)?;
         }
         let parent = destination
             .parent()
@@ -107,6 +176,11 @@ impl OutputTransaction {
             destination,
             lock,
             overwrite,
+            guarded_input: if in_place {
+                None
+            } else {
+                Some(resolved_path(input)?)
+            },
         })
     }
 
@@ -127,6 +201,13 @@ impl OutputTransaction {
             if !self.overwrite {
                 return Err(DnoiseError::OutputExists(self.destination.clone()));
             }
+            // The run took minutes, so repeat both checks at the one moment
+            // that is destructive: the destination may have been replaced by an
+            // alias of the input, or by a folder that is not a .d, since begin.
+            if let Some(input) = &self.guarded_input {
+                check_not_aliased(input, &self.destination)?;
+            }
+            check_replaceable(&self.destination)?;
             let dir = Builder::new()
                 .prefix(".dnoise-backup-")
                 .tempdir_in(self.destination.parent().unwrap())?;
@@ -177,6 +258,9 @@ mod tests {
         let output = root.path().join("output.d");
         fs::create_dir(&input).unwrap();
         fs::create_dir(&output).unwrap();
+        // A replaceable destination is empty or holds analysis.tdf. These
+        // fixtures stand in for a previous run's output.
+        fs::write(output.join("analysis.tdf"), b"tdf").unwrap();
         fs::write(output.join("original"), b"keep").unwrap();
         (root, input, output)
     }
@@ -259,6 +343,126 @@ mod tests {
             b"keep"
         );
     }
+    /// `--force` once moved any existing directory aside and deleted it, so an
+    /// output path that pointed at an ordinary folder destroyed it.
+    #[test]
+    fn force_refuses_a_destination_that_is_not_a_d_folder() {
+        let (root, input, _) = setup();
+        let destination = root.path().join("notes");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("thesis.txt"), b"irreplaceable").unwrap();
+        let error = OutputTransaction::begin(&input, &destination, true, false)
+            .err()
+            .unwrap();
+        assert!(
+            error.to_string().contains("holds no analysis.tdf"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(destination.join("thesis.txt")).unwrap(),
+            b"irreplaceable"
+        );
+        // An empty folder and a previous .d output are both replaceable.
+        fs::remove_file(destination.join("thesis.txt")).unwrap();
+        assert!(OutputTransaction::begin(&input, &destination, true, false).is_ok());
+        fs::write(destination.join("analysis.tdf"), b"tdf").unwrap();
+        fs::write(destination.join("analysis.tdf_bin"), b"bin").unwrap();
+        assert!(OutputTransaction::begin(&input, &destination, true, false).is_ok());
+    }
+
+    /// The destination can become unreplaceable while the run is in progress,
+    /// and commit is the step that deletes it.
+    #[test]
+    fn commit_refuses_a_destination_that_stopped_being_a_d_folder() {
+        let (_root, input, output) = setup();
+        let tx = OutputTransaction::begin(&input, &output, true, false).unwrap();
+        fs::remove_file(output.join("analysis.tdf")).unwrap();
+        let error = tx.commit().unwrap_err();
+        assert!(
+            error.to_string().contains("holds no analysis.tdf"),
+            "{error}"
+        );
+        assert_eq!(fs::read(output.join("original")).unwrap(), b"keep");
+    }
+
+    /// Two paths can reach one directory through a bind mount or a substituted
+    /// drive and still canonicalize differently, so the path comparison passes
+    /// and the install deletes the input. A directory bind mount needs root, so
+    /// the always-on case here is a hard-linked file, which has the same shape:
+    /// one inode, two paths, neither a prefix of the other.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_same_file_reached_by_two_paths() {
+        let (root, _, _) = setup();
+        let one = root.path().join("one.json");
+        let two = root.path().join("two.json");
+        fs::write(&one, b"{}").unwrap();
+        fs::hard_link(&one, &two).unwrap();
+        assert_ne!(one.canonicalize().unwrap(), two.canonicalize().unwrap());
+        for (a, b) in [(&one, &two), (&two, &one)] {
+            let error = check_disjoint(a, b).unwrap_err();
+            assert!(
+                error.to_string().contains("the same file on disk"),
+                "{error}"
+            );
+        }
+        // A distinct file with the same contents is not an alias.
+        let other = root.path().join("other.json");
+        fs::write(&other, b"{}").unwrap();
+        assert!(check_disjoint(&one, &other).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_is_none_for_a_missing_path_and_equal_through_an_alias() {
+        let (root, input, _) = setup();
+        let one = root.path().join("one.json");
+        let two = root.path().join("two.json");
+        fs::write(&one, b"{}").unwrap();
+        fs::hard_link(&one, &two).unwrap();
+        assert_eq!(identity(&one).unwrap(), identity(&two).unwrap());
+        assert_ne!(identity(&one).unwrap(), identity(&input).unwrap());
+        assert!(identity(&root.path().join("missing")).unwrap().is_none());
+    }
+
+    /// Run against a real directory alias (the one on this machine is
+    /// `/mnt/data/Data` and `~/Data`):
+    /// `DNOISE_ALIAS_A=/mnt/data/Data DNOISE_ALIAS_B=$HOME/Data cargo test -- --ignored`
+    #[test]
+    #[ignore = "needs two paths that are the same directory, e.g. a bind mount"]
+    fn rejects_a_real_directory_alias() {
+        let (a, b) = match (
+            std::env::var_os("DNOISE_ALIAS_A"),
+            std::env::var_os("DNOISE_ALIAS_B"),
+        ) {
+            (Some(a), Some(b)) => (PathBuf::from(a), PathBuf::from(b)),
+            _ => panic!("set DNOISE_ALIAS_A and DNOISE_ALIAS_B to two paths of one directory"),
+        };
+        assert_ne!(
+            a.canonicalize().unwrap(),
+            b.canonicalize().unwrap(),
+            "the two paths canonicalize the same, so this is not the aliasing case"
+        );
+        // The same directory as input and as output.
+        let error = check_disjoint(&a, &b).unwrap_err();
+        assert!(
+            error.to_string().contains("the same file on disk"),
+            "{error}"
+        );
+        // An output that does not exist yet, under an aliased ancestor.
+        let nested = check_disjoint(&a, &b.join("output.d")).unwrap_err();
+        assert!(
+            nested.to_string().contains("the same file on disk"),
+            "{nested}"
+        );
+        // An input under one path, the output folder holding it under the other.
+        let parent = check_disjoint(&a.join("run.d"), &b).unwrap_err();
+        assert!(
+            parent.to_string().contains("the same file on disk"),
+            "{parent}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn rejects_symlink_alias_and_normalizes_missing_suffix() {
