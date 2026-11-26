@@ -12,11 +12,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `zstd-safe` 7.4.2 and `zstd-sys` 2.2.0 with bundled zstd 1.6.0
   (RUSTSEC-2026-0391, -0399 through -0403 and -0410), and `rusqlite` 0.35 to
   0.41, which brings `libsqlite3-sys` 0.39.1 and the SQLite fix for
-  CVE-2026-119375 (RUSTSEC-2026-0459). Output was checked byte for byte against
-  v0.6.0 on the reader-swap run set, since both upgrades change a compressor and
-  a database engine that write the output.
-- Still open: `ruzstd` RUSTSEC-2026-0344, a decompression bomb. `sage-plus-tdf`
-  0.2.0 requires exactly 0.9.0, so the lock cannot move until that fork does.
+  CVE-2026-119375 (RUSTSEC-2026-0459), and `sage-plus-tdf` 0.2.0 to 0.2.4, which
+  takes `ruzstd` 0.9.1 (RUSTSEC-2026-0344, a decompression bomb). `cargo audit`
+  reports no vulnerabilities again.
+- Output carries the same data as v0.6.0 but is not byte-identical to it. The
+  bundled zstd went from 1.5.6 to 1.6.0 and re-encodes a minority of frame
+  records to a different length, which shifts the `Frames.TimsId` byte offset of
+  every later frame. Checked on the reader-swap run set: every frame's
+  decompressed type-2 payload and scan count are identical, and every
+  `analysis.tdf` column other than `TimsId` is identical, so point counts, TOF
+  indices and intensities are unchanged. A reader that follows `TimsId`, which is
+  what the Bruker SDK and every timsrust consumer do, sees the same frames.
 
 ### Changed
 - rusqlite 0.41 no longer converts `usize` or `u64` to and from SQL, so three

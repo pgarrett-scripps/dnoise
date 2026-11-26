@@ -51,7 +51,9 @@ thiserror = "2.0.18"
 # Bruker TDF frame reader: our fork of MannLabs timsrust 0.6.6, reduced to
 # reading frames, calibration and metadata (pure Rust, no async or cloud
 # stack). Needs rustc 1.97.
-sage-plus-tdf = "0.2.0"
+# 0.2.2 is the first release that takes ruzstd 0.9.1 (RUSTSEC-2026-0344),
+# so the floor is the real minimum rather than the version first used.
+sage-plus-tdf = "0.2.4"
 # Structured logging facade. Zero-cost when no subscriber is installed (e.g. when
 # dnoise is used purely as a library), so the core has no runtime logging overhead
 # unless a binary opts in. The CLI installs a subscriber via `tracing-subscriber`.
