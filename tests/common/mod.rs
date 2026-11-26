@@ -60,9 +60,9 @@ pub fn fixture(root: &Path, name: &str, dia: bool) -> PathBuf {
                 } else {
                     0
                 },
-                offset,
-                points.iter().map(|p| p.2 as u64).sum::<u64>(),
-                points.len()
+                offset as i64,
+                points.iter().map(|p| p.2 as i64).sum::<i64>(),
+                points.len() as i64
             ],
         )
         .unwrap();

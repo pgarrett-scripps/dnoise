@@ -52,7 +52,7 @@ pub(crate) fn read(path: &Path) -> Result<DiaRegions> {
     let mut stmt=db.prepare("SELECT p.Frame,p.WindowGroup,f.MsMsType,f.NumScans FROM DiaFrameMsMsInfo p LEFT JOIN Frames f ON f.Id=p.Frame ORDER BY p.Frame")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
-        let frame: usize = row.get(0)?;
+        let frame = row.get::<_, i64>(0)? as usize;
         let group: i64 = row.get(1)?;
         let kind: Option<i64> = row.get(2)?;
         let scans: Option<i64> = row.get(3)?;

@@ -92,7 +92,7 @@ pub(crate) fn build(
         let row = rows
             .next()?
             .ok_or_else(|| invalid("frame metadata changed"))?;
-        if row.get::<_, usize>(0)? != frame.id {
+        if row.get::<_, i64>(0)? as usize != frame.id {
             return Err(invalid("frame metadata changed"));
         }
         let atoms = (1..count)
@@ -140,7 +140,7 @@ pub(crate) fn build(
         let mut rows = stmt.query([])?;
         let mut ends = HashMap::new();
         while let Some(row) = rows.next()? {
-            let id: usize = row.get(0)?;
+            let id = row.get::<_, i64>(0)? as usize;
             let &i = by_id
                 .get(&id)
                 .ok_or_else(|| invalid("event references missing frame"))?;

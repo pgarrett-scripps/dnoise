@@ -278,7 +278,7 @@ fn validation_agrees_across_pools_and_rejects_corruption_in_later_batches() {
     for id in 5..=600 {
         db.execute(
             "INSERT INTO Frames SELECT ?1,Time,ScanMode,MsMsType,?2,MaxIntensity,100,NumScans,1,AccumulationTime,MzCalibration,TimsCalibration FROM Frames WHERE Id=1",
-            rusqlite::params![id, offset],
+            rusqlite::params![id, offset as i64],
         ).unwrap();
         binary.write_all(&record).unwrap();
         offset += record.len() as u64;

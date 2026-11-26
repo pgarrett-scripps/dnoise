@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- Dependency upgrades that clear four of the five `cargo audit` findings that
+  opened against 0.6.0 after its release. `zstd` 0.13.3 to 0.13.6, which brings
+  `zstd-safe` 7.4.2 and `zstd-sys` 2.2.0 with bundled zstd 1.6.0
+  (RUSTSEC-2026-0391, -0399 through -0403 and -0410), and `rusqlite` 0.35 to
+  0.41, which brings `libsqlite3-sys` 0.39.1 and the SQLite fix for
+  CVE-2026-119375 (RUSTSEC-2026-0459). Output was checked byte for byte against
+  v0.6.0 on the reader-swap run set, since both upgrades change a compressor and
+  a database engine that write the output.
+- Still open: `ruzstd` RUSTSEC-2026-0344, a decompression bomb. `sage-plus-tdf`
+  0.2.0 requires exactly 0.9.0, so the lock cannot move until that fork does.
+
+### Changed
+- rusqlite 0.41 no longer converts `usize` or `u64` to and from SQL, so three
+  internal reads and four test fixtures bind `i64` instead, which is what these
+  TDF columns hold. No public API or output change.
+
 ### Fixed
 - **`--force` could delete the input `.d`.** The input/output overlap check
   compared resolved paths, and `canonicalize` resolves symlinks but not bind
